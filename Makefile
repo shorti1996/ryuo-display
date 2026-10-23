@@ -160,6 +160,21 @@ deps:
 	fi; \
 	if $(PYTHON) -c 'import PySide6' >/dev/null 2>&1; then ok "PySide6 for $(PYTHON)"; \
 	else need "PySide6 for $(PYTHON)" python3-pyside6; fi; \
+	echo "second display (optional; Plasma on Wayland, NVIDIA GPU):"; \
+	opt() { printf '  missing  %-34s dnf install %s\n' "$$1" "$$2"; }; \
+	for t in krfb-virtualmonitor:krfb unshare:util-linux-core pw-dump:pipewire-utils pw-link:pipewire-utils \
+		gst-launch-1.0:gstreamer1; do \
+		if command -v $${t%%:*} >/dev/null 2>&1; then ok $${t%%:*}; else opt $${t%%:*} $${t#*:}; fi; \
+	done; \
+	for e in pipewiresrc:pipewire-gstreamer glupload:gstreamer1-plugins-base \
+		nvh265enc:gstreamer1-plugins-bad-free gdppay:gstreamer1-plugins-bad-free; do \
+		if gst-inspect-1.0 --exists $${e%%:*} >/dev/null 2>&1; then ok "GStreamer $${e%%:*}"; \
+		else opt "GStreamer $${e%%:*}" $${e#*:}; fi; \
+	done; \
+	if $(PYTHON) -c 'import gi' >/dev/null 2>&1; then ok "PyGObject for $(PYTHON)"; \
+	else opt "PyGObject for $(PYTHON)" python3-gobject-base; fi; \
+	if [ -f $(APPDIR)/receiver/receiver.jar ]; then ok receiver/receiver.jar; \
+	else printf '  missing  %-34s make receiver\n' receiver/receiver.jar; fi; \
 	echo "dev:"; \
 	if command -v uv >/dev/null 2>&1; then ok uv; else want uv uv; fi; \
 	if command -v node >/dev/null 2>&1; then ok node; else want node nodejs; fi; \

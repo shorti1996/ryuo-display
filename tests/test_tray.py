@@ -164,6 +164,26 @@ def test_stats_toggle_posts_overlay(env, tray):
     assert env.calls[-1] == ("/api/state", None)  # refreshed after the post
 
 
+def test_second_display_follows_state_and_posts(env, tray):
+    env.state["value"] = {**CONNECTED, "display": {"on": False, "state": "off"}}
+    tray.refresh()
+    assert tray.display.isEnabled() and not tray.display.isChecked()
+    tray.display.trigger()
+    assert ("/api/display", {"on": True}) in env.calls
+    env.state["value"] = {**CONNECTED, "display": {"on": True, "state": "starting"}}
+    tray.refresh()
+    assert tray.display.isChecked()
+
+
+def test_second_display_disabled_without_support_or_daemon(env, tray):
+    env.state["value"] = CONNECTED  # an older ryuod: no "display" key
+    tray.refresh()
+    assert not tray.display.isEnabled()
+    env.state["value"] = None
+    tray.refresh()
+    assert not tray.display.isEnabled() and not tray.display.isChecked()
+
+
 def test_brightness_action_posts_value(env, tray):
     env.state["value"] = CONNECTED
     tray.refresh()

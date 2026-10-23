@@ -501,6 +501,32 @@ Request (keys optional): `{"tempUnit":"Fahrenheit","memoryMHz":6000,"sensors":{"
 changed; the other keys affect the next heartbeat. Response like `/api/overlay`, with
 `"sent":[]` when nothing was sent.
 
+### `POST /api/display`
+
+Added after the prototype (2026-10-23). Request `{"on":true}` or `{"on":false}`; anything else is
+400. Saves `secondDisplay` in state.json and starts or stops `ryuo_display.py`, a child process
+that shows a virtual monitor of the desktop on the panel. Nothing is sent over HID: the heartbeat
+keeps running, so HomeUI stays out of standby under the receiver's layer. The reply comes at once:
+
+```json
+{"ok":true,"display":{"on":true,"state":"starting","fps":null,"mbps":null,"message":null,"error":null,"retryInS":null},"config":{…}}
+```
+
+`GET /api/state` carries the same `display` object, `null` in a daemon without the feature.
+`state` is one of:
+
+| state | meaning |
+|---|---|
+| `off` | switch off, no child |
+| `starting` | child running, not streaming yet; `message` is its latest output line |
+| `on` | streaming; `fps` and `mbps` are what was sent over the last 5 s (null until the first 5 s pass, 0 on a still desktop) |
+| `stopping` | SIGTERM sent; the child removes the virtual monitor and waits for the receiver to release the cooler's decoder (about 1–10 s) |
+| `retrying` | the child failed or exited; `error` holds its error lines, `retryInS` the seconds to the next start (backoff 5, 10, 20, 40, then 60 s; a child that streamed starts again at 5 s) |
+| `error` | a failure that a retry would hit again (missing program, no cooler on adb, exit status 2); retried on `{"on":true}` or when the cooler reconnects |
+
+The child is never sent SIGKILL before 60 s: a receiver killed while it holds the hardware decoder
+leaks it. On shutdown the daemon stops the child before the device worker sends `disconn`.
+
 ---
 
 ## 6. Acceptance checks

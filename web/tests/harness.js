@@ -73,8 +73,13 @@ export function defaultConfig() {
     media: ["RYUO_IV_HW_Info_04.mp4"], playMode: "Single", ratio: "2:1",
     items: ["CPU Temperature", "GPU Temperature", "Fan Speed Disk R MB/s", "Date&Time", "", ""],
     statsVisible: true, titleColor: "#E5252B", contentColor: "#FFFFFF", filter: { on: false, opacity: 100 },
-    brightness: 100, tempUnit: "Celsius", memoryMHz: 0, sensors: { motherboard: "auto" },
+    brightness: 100, tempUnit: "Celsius", memoryMHz: 0, sensors: { motherboard: "auto" }, secondDisplay: false,
   };
+}
+
+/** ryuod.Display.status() with the switch off. */
+export function defaultDisplay() {
+  return { on: false, state: "off", fps: null, mbps: null, message: null, error: null, retryInS: null };
 }
 
 export function defaultDevice() {
@@ -91,10 +96,12 @@ class Invalid extends Error {}
  * A fake ryuod. Tests change `config`, `device`, `stats`, `mediaLists` directly, queue one-off
  * replies with `replyOnce`, and read what the page sent from `calls`.
  */
-export function makeDaemon({ config = {}, device = {}, stats = {}, media } = {}) {
+export function makeDaemon({ config = {}, device = {}, stats = {}, media, display = {} } = {}) {
   const d = {
     config: { ...defaultConfig(), ...clone(config) },
     device: { ...defaultDevice(), ...clone(device) },
+    // The second-display status in GET /api/state; null stands for a ryuod without the feature.
+    display: display === null ? null : { ...defaultDisplay(), ...clone(display) },
     // Sampled values by item: {value, panel}; unit and available come from the catalog.
     stats: {
       "CPU Temperature": { value: 50.4, panel: "50" },
@@ -135,6 +142,7 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media } = {})
       ok: true, device: clone(d.device), config: clone(d.config),
       limits: { slots: 6, brightnessMax: 102, frameMax: 1024, lastHeartbeatBytes: 548 },
       media: { preset: [...d.mediaLists.preset], custom: [...d.mediaLists.custom] },
+      display: clone(d.display),
     }),
     "GET /api/stats": () => {
       const values = {};
@@ -215,6 +223,14 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media } = {})
     },
     // The page only fetches this after its <video> or <img> reports an error.
     "GET /api/media/preview": () => reply(206, null),
+    // Like ryuod: answers at once; the child goes through starting/stopping in later polls.
+    "POST /api/display": (body) => {
+      if (typeof body.on !== "boolean") throw new Invalid("on must be true or false");
+      if (d.display === null) return err(503, "second display is not available in this ryuod");
+      d.config.secondDisplay = body.on;
+      d.display = { ...defaultDisplay(), on: body.on, state: body.on ? "starting" : "stopping" };
+      return reply(200, { ok: true, display: clone(d.display), config: clone(d.config) });
+    },
     "POST /api/prefs": (body) => {
       const ch = {};
       if ("tempUnit" in body) {

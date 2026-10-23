@@ -128,6 +128,12 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
 .seg label:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: -2px; }
 #upBar { width: 100%; margin-top: 10px; accent-color: var(--accent); }
 #upStatus.bad { color: var(--bad); }
+#displayState { margin: 8px 0 0; }
+#displayErr {
+  white-space: pre-wrap; overflow-wrap: anywhere; color: var(--bad); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin: 8px 0 0; max-height: 220px; overflow: auto;
+}
+#displayRetry { margin-top: 8px; }
 @media (max-width: 520px) { .row { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
 </style>
 </head>
@@ -151,6 +157,14 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
     </section>
   </div>
   <div>
+    <section id="displaySection">
+      <h2>Second display</h2>
+      <div class="row"><span>Panel as monitor</span><label class="inline"><input type="checkbox" id="displayOn"> show a virtual monitor of the desktop on the panel</label></div>
+      <p id="displayState" aria-live="polite"><span class="dot" id="displayDot"></span><span id="displayText">…</span></p>
+      <pre class="mono" id="displayErr" hidden></pre>
+      <button id="displayRetry" type="button" hidden>Try again now</button>
+      <p class="note">Adds a 2240×1080 virtual monitor, Virtual-RYUO, to the desktop. Windows dragged past the right edge of your main monitor appear on the panel. While it runs, the panel's stats overlay and background video are hidden; brightness still works. The panel gets a new frame only when something on the virtual monitor changes. Turning it off removes the virtual monitor, which takes up to about 10 s. Needs KDE Plasma on Wayland, krfb and an NVIDIA GPU.</p>
+    </section>
     <section>
       <h2>Stats in each slot</h2>
       <div class="row"><span>Show on panel</span><label class="inline"><input type="checkbox" id="statsOn"> stats overlay (off keeps your slot choices)</label></div>
@@ -555,6 +569,44 @@ async function cancelUpload() {
   if (upXhr) upXhr.abort();
 }
 
+/* ---------- second display ---------- */
+let displaySending = false;  // a POST /api/display is in flight; the poll must not reset the switch
+function displayText(s) {
+  switch (s.state) {
+    case "off": return "Off";
+    case "starting": return "Starting" + (s.message ? `: ${s.message}` : "…");
+    case "on":
+      if (s.fps == null) return "On. The frame rate shows after the first 5 s.";
+      if (s.fps === 0) return "On. No frames sent in the last 5 s: nothing on the virtual monitor changed.";
+      return `On: ${s.fps.toFixed(1)} frames/s at ${s.mbps.toFixed(1)} Mb/s to the panel (average over 5 s)`;
+    case "stopping": return "Stopping: removing the virtual monitor, up to about 10 s…";
+    case "retrying": return `Not running. Next try in ${s.retryInS ?? 0} s.`;
+    case "error": return "Stopped by an error that a retry would hit again. Fix the cause, then press Try again now. It is also tried again when the cooler reconnects.";
+    default: return s.state;
+  }
+}
+function renderDisplay(s) {
+  const failed = !!s && (s.state === "retrying" || s.state === "error");
+  $("displayOn").disabled = !s;
+  if (s && !displaySending) $("displayOn").checked = s.on;
+  $("displayDot").className = "dot" + (!s ? "" : failed ? " bad" : s.state === "on" ? " ok" : "");
+  $("displayText").textContent = s ? displayText(s) : "Not available: this ryuod has no second-display support. Restart it.";
+  $("displayErr").hidden = !failed || !s.error;
+  $("displayErr").textContent = failed && s.error ? s.error : "";
+  $("displayRetry").hidden = !failed;
+}
+async function sendDisplay(on) {
+  displaySending = true;
+  try {
+    const j = await api("/api/display", { on });
+    renderDisplay(j.display);
+    say(on ? "Second display: starting" : "Second display: stopping");
+  } catch (e) {
+    $("displayOn").checked = !on;
+    showResult(e, "Second display");
+  } finally { displaySending = false; }
+}
+
 /* ---------- polling ---------- */
 function age(ms) { return ms == null ? "—" : (ms < 10000 ? (ms / 1000).toFixed(1) + " s" : Math.round(ms / 1000) + " s"); }
 async function pollState() {
@@ -575,6 +627,7 @@ async function pollState() {
     $("err").textContent = d.lastError && !d.connected ? d.lastError : "";
     if (!config) applyConfig(j.config);
     onUploadState(j.upload);
+    renderDisplay(j.display);
   } catch (e) {
     unreachable = true;
     $("dot").className = "dot bad"; $("conn").textContent = "daemon unreachable"; $("err").textContent = e.message;
@@ -604,6 +657,8 @@ $("mpVideo").addEventListener("loadeddata", () => { $("mpStatus").textContent = 
 $("mpVideo").addEventListener("error", () => { if ($("mpVideo").getAttribute("src")) previewFailed(); });
 $("mpImage").addEventListener("error", () => { if ($("mpImage").getAttribute("src")) previewFailed(); });
 $("upGo").addEventListener("click", upload);
+$("displayOn").addEventListener("change", () => sendDisplay($("displayOn").checked));
+$("displayRetry").addEventListener("click", () => sendDisplay(true));
 $("upCancel").addEventListener("click", cancelUpload);
 document.querySelectorAll('input[name=unit]').forEach((r) => r.addEventListener("change", () => sendPrefs({ tempUnit: r.value })));
 $("memMHz").addEventListener("change", () => {

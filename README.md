@@ -11,8 +11,8 @@ You get:
 | piece | what it does |
 |---|---|
 | `ryuod` (systemd user service) | keeps the panel alive, samples the stats, serves the control page on **http://127.0.0.1:8746/** |
-| control page | pick stats, colours, brightness and background video in a browser |
-| tray icon | show/hide stats, brightness, open the control page, start/stop the daemon |
+| control page | pick stats, colours, brightness and background video in a browser; switch the panel to a second monitor |
+| tray icon | show/hide stats, second display on/off, brightness, open the control page, start/stop the daemon |
 | `ryuo.py` | command-line tool: device info, upload, play, stop, brightness |
 
 Tested on one machine only: Fedora 43, KDE Plasma 6 on Wayland, cooler firmware V1.0.10.
@@ -29,9 +29,11 @@ Other distributions, desktops and firmware versions have not been tried.
 | `ffmpeg` and `ffprobe` with the `libx265` encoder | uploading videos the panel can't decode as they are | Fedora's own `ffmpeg-free` has no `libx265`: install `ffmpeg` from RPM Fusion (`sudo dnf swap ffmpeg-free ffmpeg --allowerasing` if `ffmpeg-free` is installed). Arch and Debian/Ubuntu `ffmpeg` include it. With a working NVIDIA GPU, `hevc_nvenc` is used instead. The service runs `/usr/bin/python3`, so the `imageio-ffmpeg` wheel in the uv environment never reaches it. |
 | a StatusNotifier system tray | tray icon | KDE Plasma has one. GNOME needs the AppIndicator extension. |
 | `nvidia-smi` (optional) | NVIDIA GPU stats | AMD GPUs are read from sysfs |
+| KDE Plasma 6 on Wayland, an NVIDIA GPU (optional) | [second display](#second-display) | Fedora packages: `krfb`, `util-linux-core` (`unshare`), `pipewire-utils`, `pipewire-gstreamer`, `gstreamer1-plugins-base`, `gstreamer1-plugins-bad-free` (its nvcodec plugin has the `nvh265enc` encoder), `python3-gobject-base` (PyGObject), `android-tools` (adb). The encoder is NVENC, so other GPUs cannot run it. Without PyGObject a window moved onto the panel after the start is shown at about 1 frame/s. |
 | `uv`, `node`/`npm` | development only | tests and lint |
 
-`make deps` checks all of these and prints the Fedora package names for anything missing.
+`make deps` checks all of these and prints the Fedora package names for anything missing. The
+second-display programs are listed separately and do not fail the check.
 
 ## Install
 
@@ -60,7 +62,8 @@ The installed unit and launchers run the code from this checkout. If you move th
 The two parts start at different times:
 
 - **Daemon**: `ryuod.service` is wanted by `default.target`, so it starts when your user's systemd
-  instance starts at login. It talks only to `/dev/hidraw*` and `adb` and needs no display.
+  instance starts at login. It talks only to `/dev/hidraw*` and `adb` and needs no display. A
+  second display switched on before logout starts once the Plasma session is up.
 - **Tray**: the XDG autostart entry starts it inside the graphical session, once a tray is there
   to show it.
 
@@ -84,6 +87,7 @@ The two parts start at different times:
 | Brightness | 0–102 on the device's scale: 100 gives 250/255 backlight, 102 gives the full 255/255 |
 | Background media | the videos and images already on the cooler, play mode (Single, Cycle, Random). Play restarts the video. |
 | Units | °C or °F, and the memory frequency in MHz (Linux has no unprivileged source for it; 0 hides that stat) |
+| Second display | a switch that shows a virtual monitor of the desktop on the panel, and its state: off, starting, on with the frames/s and Mb/s sent, stopping, or the error with the next retry in seconds |
 
 Settings are saved in `~/.config/ryuo/state.json` and restored when the daemon starts.
 
@@ -96,6 +100,7 @@ firmware's fan slot, so the panel always prints "RPM" as their unit. The label c
 |---|---|
 | status line | daemon and cooler state, product and firmware |
 | Show stats on panel | toggles the overlay, same as the switch on the page |
+| Use panel as second display | same as the second-display switch on the page |
 | Brightness | 25, 50, 75 or 100 |
 | Open control page | opens http://127.0.0.1:8746/ (left-clicking the icon does the same) |
 | Start ryuod | shown only while the daemon is down; starts `ryuod.service` |
@@ -104,6 +109,32 @@ firmware's fan slot, so the panel always prints "RPM" as their unit. The label c
 
 Starting "RYUO LCD" from the start menu while the tray already runs opens the control page
 instead of adding a second icon.
+
+### Second display
+
+Turn on **Panel as monitor** under Second display on the control page (or **Use panel as second
+display** in the tray). Within about 5 s the desktop gets a 2240×1080 virtual monitor named
+Virtual-RYUO, and the panel shows it in place of the background video and stats overlay. Windows
+dragged past the right edge of your main monitor appear on the panel. The mouse pointer is not
+drawn on the panel.
+
+- The page shows the state: Starting, then On with the frames/s and Mb/s sent to the panel, averaged
+  over 5 s. A still desktop sends no frames, and the panel keeps the last one.
+- Brightness keeps working, and the daemon keeps its heartbeat going. Without it the panel would drop
+  to standby and to 50/255 backlight.
+- Turning it off removes the virtual monitor, which takes up to about 10 s; windows on it move to the
+  main monitor. The panel then shows the background video again.
+- The switch is saved in `state.json`. When the daemon starts with it on, display mode starts again,
+  waiting for the Plasma session if the daemon started first.
+- If it fails to start or stops on its own, the page shows the error and when the next try is. Tries
+  are 5, 10, 20, 40 s apart, then every 60 s. Errors that a retry would hit again (a missing
+  program, no cooler on adb) are not retried until you press **Try again now** or the cooler
+  reconnects.
+
+The daemon runs `ryuo_display.py` for this, which can also run on its own from a terminal:
+`/usr/bin/python3 ryuo_display.py --help` (the daemon must have the switch off). It pushes
+`receiver/receiver.jar` to the cooler over adb and streams HEVC to it; `make receiver` rebuilds
+the jar.
 
 ### Command line
 
@@ -146,6 +177,11 @@ tested here; only H.264 MP4 files have been played on the test unit.
 | `Permission denied` on `/dev/hidraw*`, or "RYUO IV HID interface not found" | The udev rule is missing or not applied yet. Run `make install-udev`, then unplug and replug the cooler's USB header (or reboot), or run `sudo udevadm trigger`. |
 | Daemon exits with `cannot bind 127.0.0.1:8746` | Another program uses port 8746, which the tray and the page expect. Free the port; systemd retries every 5 s. |
 | The stats overlay disappears for about 2 s every 5 min | The cooler's own burn-in protection plays a short screensaver clip. The firmware resets that timer only by restarting the video, so the daemon leaves it on. |
+| Second display: "no Wayland session yet" | The daemon found no `wayland-N` socket in `$XDG_RUNTIME_DIR`: Plasma has not started yet (it retries), or the session is X11, which display mode does not support. |
+| Second display: "no PipeWire stream for Virtual-RYUO after 10 s" | KWin did not start the virtual monitor's screencast stream. Seen once on the test machine, where the journal showed `kwin_wayland: GL_OUT_OF_MEMORY ... Failed to allocate memory for texture`; the retry 5 s later worked. |
+| Second display: "krfb-virtualmonitor already serves Virtual-RYUO" | Another `ryuo_display.py` is running, for example one started from a terminal or one still stopping. The daemon retries; stop the other one if it keeps running. |
+| Second display: "no cooler on adb" or "missing programs" | Not retried by itself. Check `adb devices` or run `make deps`, then press **Try again now**. |
+| After display mode the panel says "Can't play this video.", or display mode never shows a first frame | The cooler's hardware decoder was left allocated, usually because the receiver was killed before it released it. Run `adb shell setprop ctl.restart android-hardware-media-c2-hal-1-1`. If it happens after stopping `ryuod.service`, the installed unit predates `KillMode=mixed`, which makes systemd signal only the daemon so it can stop display mode in order: run `make install` again. |
 | Cooler not found on another firmware | The HID interface is matched by product ID `1c76` with vendor `0b05` (firmware 1.0.3 and 1.0.10) or `1c75` (firmware 1.0.7, per other projects). Only V1.0.10 has been tested. `lsusb` shows the IDs your unit reports; the test unit lists `0b05:1c76 ASUSTek Computer, Inc. ROG RYUO IV Standard`. |
 
 ## Safety
@@ -183,6 +219,8 @@ done.
 |---|---|
 | `ryuo_proto.py` | frame codec, HID device class, message builders, pidfile helpers; shared by the daemon and the CLI |
 | `ryuod.py` | the daemon: device worker, stats sampler, HTTP server and JSON API |
+| `ryuo_display.py` | the second display: virtual monitor, HEVC encoder and stream to the cooler; the daemon runs it while the switch is on |
+| `receiver/` | `RyuoDisplay.java`, the on-device stream receiver, and its built `receiver.jar` |
 | `ryuo_media.py` | video uploads for the daemon: ffprobe check, transcode to HEVC when the panel can't decode the file, adb push |
 | `ryuo.py` | the CLI |
 | `ryuo_tray.py` | the tray icon; talks only to the daemon's HTTP API |

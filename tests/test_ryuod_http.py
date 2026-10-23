@@ -10,10 +10,32 @@ import json
 import threading
 
 import pytest
-from fakes import CUSTOM, PRESET, FakeDevice
+from fakes import CUSTOM, PRESET, FakeDevice, FakeDisplayChild, make_display, wait_until
 
 import ryuo_proto as P
 import ryuod
+
+
+class SwitchDisplay:
+    """ryuod.Display reduced to its switch: records set() and reports a fixed status."""
+
+    def __init__(self):
+        self.wanted = []
+
+    def set(self, on):
+        self.wanted.append(on)
+
+    def status(self):
+        on = bool(self.wanted and self.wanted[-1])
+        return {
+            "on": on,
+            "state": "starting" if on else "off",
+            "fps": None,
+            "mbps": None,
+            "message": None,
+            "error": None,
+            "retryInS": None,
+        }
 
 
 class Api:
@@ -64,6 +86,7 @@ def api(tmp_path, monkeypatch):
     d.state.update({"media": ["RYUO_IV_HW_Info_04.mp4"]})
     d.sampler = ryuod.Sampler(d.state)  # never started; tests fill its snapshot by hand
     d.device = FakeDevice(d.state, d.sampler)
+    d.display = SwitchDisplay()
     httpd = ryuod.Server(("127.0.0.1", 0), ryuod.Handler)
     httpd.daemon_ref = d
     t = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
@@ -521,6 +544,75 @@ def test_prefs_rejects(api, body, monkeypatch):
     assert status == 400
     assert api.sent == []
     assert api.disk_state() == before
+
+
+# ---------------------------------------------------------------- POST /api/display
+
+
+def test_state_reports_the_second_display(api):
+    _, _, body = api.get("/api/state")
+    assert body["display"] == api.d.display.status()
+    assert body["display"]["state"] == "off"
+    assert body["config"]["secondDisplay"] is False
+
+
+def test_display_on_saves_and_switches(api):
+    status, _, body = api.post("/api/display", {"on": True})
+    assert status == 200
+    assert body["ok"] is True
+    assert body["display"]["on"] is True and body["display"]["state"] == "starting"
+    assert body["config"]["secondDisplay"] is True
+    assert api.d.display.wanted == [True]
+    assert api.disk_state()["secondDisplay"] is True
+    assert api.sent == []  # nothing goes to the cooler over HID; the heartbeat carries on
+
+    status, _, body = api.post("/api/display", {"on": False})
+    assert status == 200
+    assert body["display"]["state"] == "off"
+    assert api.d.display.wanted == [True, False]
+    assert api.disk_state()["secondDisplay"] is False
+
+
+@pytest.mark.parametrize("body", [{}, {"on": "yes"}, {"on": 1}, {"on": None}])
+def test_display_rejects(api, body):
+    before = api.disk_state()
+    status, _, reply = api.post("/api/display", body)
+    assert status == 400
+    assert reply == {"ok": False, "error": "on must be true or false"}
+    assert api.d.display.wanted == []
+    assert api.disk_state() == before
+
+
+def test_display_needs_json(api):
+    status, _, _ = api.request("POST", "/api/display", raw=b'{"on":true}', headers={"Content-Type": "text/plain"})
+    assert status == 415
+    assert api.d.display.wanted == []
+
+
+def test_display_without_supervisor(api):
+    api.d.display = None
+    assert api.get("/api/state")[2]["display"] is None
+    status, _, body = api.post("/api/display", {"on": True})
+    assert status == 503
+    assert body["ok"] is False
+
+
+def test_display_end_to_end_with_a_fake_child(api, tmp_path, monkeypatch):
+    monkeypatch.setattr(ryuod, "log", lambda msg: None)
+    child = FakeDisplayChild(tmp_path)
+    child.listen("wayland-0")
+    child.listen("bus")
+    api.d.display = make_display(child)
+    try:
+        assert api.post("/api/display", {"on": True})[0] == 200
+        on = wait_until(lambda: (d := api.get("/api/state")[2]["display"])["fps"] is not None and d, what="fps")
+        assert on["state"] == "on" and on["fps"] == 59.8 and on["mbps"] == 9.7
+        assert api.post("/api/display", {"on": False})[0] == 200
+        wait_until(lambda: api.get("/api/state")[2]["display"]["state"] == "off", what="off")
+        assert child.events()[-2:] == ["sigterm", "clean exit"]
+    finally:
+        assert api.d.display.stop(10)
+        child.close()
 
 
 # ---------------------------------------------------------------- request hygiene
