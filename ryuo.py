@@ -31,6 +31,7 @@ from ryuo_proto import (  # noqa: F401
     remove_pidfile,
     running_driver,
     screen_config,
+    settings,
     stop_driver,
     superseded,
     write_pidfile,
@@ -54,7 +55,8 @@ def adb(*args):
 def media_config(names, mode, ratio, sysinfo):
     # Padded to 6 entries: with a shorter list HomeUI keeps the slots a previous ryuod run set,
     # and this heartbeat carries only a timestamp, so they would show frozen values.
-    return screen_config(names, mode, ratio, sysinfo, None, pad=True)
+    # settings: null makes case 105 load the "defult" animation over the media; ryuod's colours.
+    return screen_config(names, mode, ratio, sysinfo, settings("#E5252B", "#FFFFFF"), pad=True)
 
 
 def main():

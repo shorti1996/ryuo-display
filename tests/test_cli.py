@@ -128,11 +128,11 @@ def test_find_hidraw_exits_when_missing(monkeypatch):
     assert ryuo.find_hidraw() == "/fake/hidraw7"
 
 
-def test_media_config_pads_and_has_no_settings(monkeypatch):
+def test_media_config_pads_and_sends_settings(monkeypatch):
     monkeypatch.setattr(P, "local_timezone", lambda: "Europe/Warsaw")
     cfg = ryuo.media_config(["a.mp4"], "Single", "2:1", ["CPU Temperature"])
     assert cfg["sysinfoDisplay"] == ["CPU Temperature", "", "", "", "", ""]
-    assert cfg["settings"] is None
+    assert cfg["settings"] == P.settings("#E5252B", "#FFFFFF")
     assert cfg["media"] == ["a.mp4"]
     assert cfg["timeZone"] == "Europe/Warsaw"
 
