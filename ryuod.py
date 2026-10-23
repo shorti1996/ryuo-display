@@ -38,7 +38,7 @@ SENSOR_RE = re.compile(r"^([A-Za-z0-9_.-]+):(temp[0-9]+)$")
 DEFAULT_ITEMS = ["CPU Temperature", "CPU Load", "GPU Temperature", "GPU Load", "Memory Utilization", "Date&Time"]
 DEFAULT_STATE = {
     "version": 1, "media": [], "playMode": "Single", "ratio": "2:1",
-    "items": DEFAULT_ITEMS, "titleColor": "#E5252B", "contentColor": "#FFFFFF",
+    "items": DEFAULT_ITEMS, "statsVisible": True, "titleColor": "#E5252B", "contentColor": "#FFFFFF",
     "filter": {"on": False, "opacity": 100}, "brightness": 100, "tempUnit": "Celsius",
     "memoryMHz": 0, "sensors": {"motherboard": "auto"},
 }
@@ -196,6 +196,7 @@ class State:
             "playMode": lambda v: v if v in P.PLAY_MODES else None,
             "ratio": lambda v: v if v in P.RATIOS else None,
             "items": lambda v: check_items(v, known),
+            "statsVisible": lambda v: v if isinstance(v, bool) else None,
             "titleColor": lambda v: check_color(v, "titleColor"),
             "contentColor": lambda v: check_color(v, "contentColor"),
             "filter": lambda v: check_filter(v, d["filter"]),
@@ -236,8 +237,14 @@ class State:
 
 
 def public_config(st):
-    return {k: st[k] for k in ("media", "playMode", "ratio", "items", "titleColor", "contentColor",
-                               "filter", "brightness", "tempUnit", "memoryMHz", "sensors")}
+    return {k: st[k] for k in ("media", "playMode", "ratio", "items", "statsVisible", "titleColor",
+                               "contentColor", "filter", "brightness", "tempUnit", "memoryMHz", "sensors")}
+
+
+def shown_items(st):
+    """The slots sent to the panel: the chosen items, or all blank while stats are hidden.
+    Hiding keeps st["items"], so showing again restores the same layout."""
+    return st["items"] if st["statsVisible"] else []
 
 
 def overlay_settings(st):
@@ -245,7 +252,7 @@ def overlay_settings(st):
 
 
 def config_for(st):
-    return P.screen_config(st["media"], st["playMode"], st["ratio"], st["items"], overlay_settings(st))
+    return P.screen_config(st["media"], st["playMode"], st["ratio"], shown_items(st), overlay_settings(st))
 
 
 def fitted_config(st):
@@ -1054,8 +1061,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 changes[key] = check_color(body[key], key)
         if "filter" in body:
             changes["filter"] = check_filter(body["filter"], st["filter"])
+        if "statsVisible" in body:
+            if not isinstance(body["statsVisible"], bool):
+                raise Invalid("statsVisible must be true or false")
+            changes["statsVisible"] = body["statsVisible"]
         st = self.d.state.update(changes)
-        res = self.apply("POST", "preset", P.preset(st["items"], overlay_settings(st)))
+        res = self.apply("POST", "preset", P.preset(shown_items(st), overlay_settings(st)))
         if res is not None:
             self.reply(200, {"ok": True, **res, "sent": ["POST preset"], "restartsVideo": False,
                              "config": public_config(st)})
@@ -1080,7 +1091,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             raise Invalid(f"not in the device media list: {', '.join(missing)} (GET /api/media?refresh=1)")
         if mode not in P.PLAY_MODES:
             raise Invalid("playMode must be Single, Cycle or Random")  # anything else: black screen
-        cfg = P.screen_config(media, mode, st["ratio"], st["items"], overlay_settings(st))
+        cfg = P.screen_config(media, mode, st["ratio"], shown_items(st), overlay_settings(st))
         # Measured at the largest SeqNumber the daemon will reach, so a playlist accepted now
         # still fits after days of heartbeats; state is saved only once it passes.
         if not P.fits("POST", "waterBlockScreenId", cfg):

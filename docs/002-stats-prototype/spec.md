@@ -466,6 +466,10 @@ Validation: `items` is a list of at most 6 strings, padded to 6 with `""`; each 
 a catalog item or `"Fan Speed "` + a label passing §3.2 rules; no duplicates among non-empty
 entries. Colours match `^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$`. `opacity` is an int 0–100.
 
+`statsVisible` (bool, default true, persisted in state.json): while false, every config and preset
+sends six `""` slots, which clears the overlay; `items` is kept, so `true` restores the same layout.
+Added after the prototype; checked on hardware 2026-10-23, including across a daemon restart.
+
 Sends: `POST preset` (§2.2). Response:
 
 ```json

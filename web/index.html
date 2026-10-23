@@ -133,6 +133,7 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
   <div>
     <section>
       <h2>Stats in each slot</h2>
+      <div class="row"><span>Show on panel</span><label class="inline"><input type="checkbox" id="statsOn"> stats overlay (off keeps your slot choices)</label></div>
       <div id="slots"></div>
       <p class="note" id="clipWarn" style="color: var(--bad)" aria-live="polite"></p>
       <p class="note">Positions are fixed by the firmware; choose a stat's position by choosing its slot. "Fan Speed" items draw any label with the unit RPM.</p>
@@ -261,8 +262,9 @@ function renderPreview() {
   const tc = $("titleColor").value, cc = $("contentColor").value;
   items.forEach((item, i) => {
     const d = $("ps" + (i + 1));
-    d.classList.toggle("hidden", !item);
-    if (!item) return;
+    const shown = item && $("statsOn").checked;
+    d.classList.toggle("hidden", !shown);
+    if (!shown) return;
     const s = stats[item] || {};
     let value = s.panel ?? "0", unit = s.unit ?? (item.startsWith("Fan Speed ") ? "RPM" : "");
     if (item === "Date&Time") { const n = new Date(); value = n.toTimeString().slice(0, 5); unit = String(n.getSeconds()).padStart(2, "0"); }
@@ -279,6 +281,7 @@ function renderPreview() {
 function applyConfig(c) {
   config = c;
   items = c.items.slice();
+  $("statsOn").checked = c.statsVisible !== false;
   $("titleColor").value = c.titleColor.length === 9 ? "#" + c.titleColor.slice(3) : c.titleColor;
   $("contentColor").value = c.contentColor.length === 9 ? "#" + c.contentColor.slice(3) : c.contentColor;
   $("filterOn").checked = c.filter.on; $("opacity").value = c.filter.opacity;
@@ -292,13 +295,14 @@ function syncLabels() {
   $("contentHex").textContent = $("contentColor").value.toUpperCase();
   $("opacityOut").textContent = $("opacity").value + " %";
   $("opacity").disabled = !$("filterOn").checked;
+  document.querySelectorAll("#slots select").forEach((s) => { s.disabled = !$("statsOn").checked; });
   const b = +$("brightness").value;
   $("brightOut").textContent = `${b} → ${Math.min(255, Math.floor(b * 2.5))}/255`;
 }
 const sendOverlay = debounce(async () => {
   try {
     const j = await api("/api/overlay", {
-      items, titleColor: $("titleColor").value.toUpperCase(), contentColor: $("contentColor").value.toUpperCase(),
+      items, statsVisible: $("statsOn").checked, titleColor: $("titleColor").value.toUpperCase(), contentColor: $("contentColor").value.toUpperCase(),
       filter: { on: $("filterOn").checked, opacity: +$("opacity").value },
     });
     config = j.config; showResult(j, "Overlay");
@@ -376,7 +380,7 @@ async function refreshCatalog() {
 
 /* ---------- wire up ---------- */
 buildSlots(); buildPreview();
-for (const id of ["titleColor", "contentColor", "filterOn", "opacity"]) {
+for (const id of ["statsOn", "titleColor", "contentColor", "filterOn", "opacity"]) {
   $(id).addEventListener("input", () => { syncLabels(); renderPreview(); sendOverlay(); });
 }
 $("brightness").addEventListener("input", () => { syncLabels(); sendBrightness(); });
