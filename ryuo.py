@@ -3,118 +3,36 @@
 
 The cooler runs Android. Media files go over adb into /sdcard/pcMedia/; playback is
 selected with text commands framed into 1024-byte HID output reports, parsed on the
-device by SerialService (DataConvert / SerialMsgManager in SerialService.apk).
-
-Frame: 0x5A | escape(len_be16 + payload + crc8) | 0x5A
-  len   = len(payload) + 5, big-endian
-  crc8  = low byte of the signed-byte sum over len + payload
-  escape: 0x5A -> 5B 01, 0x5B -> 5B 02
-Payload: "<METHOD> <cmd> 1\r\nKey=Value\r\n...\r\n\r\n<json>". The device needs at
-least two header lines, or it NPEs reading SeqNumber.
+device by SerialService (DataConvert / SerialMsgManager in SerialService.apk). The frame
+codec and device class live in ryuo_proto.py.
 
 HomeUI drops back to the standby video if no command arrives for 5 s, so `play` keeps
-sending "STATE all" heartbeats until stopped. `stop` signals that process through its
-pidfile; on exit it sends "disconn" so standby starts at once instead of 5 s later.
+sending "STATE all" heartbeats until stopped. `stop` signals that process (or ryuod)
+through its pidfile; on exit it sends "disconn" so standby starts at once instead of 5 s later.
 """
 import argparse
-import glob
 import json
 import os
-import select
 import signal
 import subprocess
 import sys
 import time
 
-VID_PID = "0003:00000B05:00001C76"
-REPORT_LEN = 1024
-MEDIA_DIR = "/sdcard/pcMedia/"
-PIDFILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "ryuo-play.pid")
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from ryuo_proto import (MEDIA_DIR, PIDFILE, REPORT_LEN, FrameTooLarge, Ryuo, decode, encode,  # noqa: F401,E402
+                        remove_pidfile, running_driver, screen_config, stop_driver, superseded,
+                        write_pidfile)
+import ryuo_proto  # noqa: E402
+
+running_player = running_driver
+stop_player = stop_driver
 
 
 def find_hidraw():
-    for node in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
-        with open(os.path.join(node, "device/uevent")) as f:
-            if f"HID_ID={VID_PID}" in f.read():
-                return "/dev/" + os.path.basename(node)
-    sys.exit("RYUO IV HID interface not found")
-
-
-def encode(payload: bytes) -> bytes:
-    body = (len(payload) + 5).to_bytes(2, "big") + payload
-    crc = sum(b - 256 if b > 127 else b for b in body) & 0xFF
-    out = bytearray([0x5A])
-    for b in body + bytes([crc]):
-        out += {0x5A: b"\x5b\x01", 0x5B: b"\x5b\x02"}.get(b, bytes([b]))
-    out.append(0x5A)
-    return bytes(out)
-
-
-def decode(frame: bytes) -> str:
-    frame = frame.rstrip(b"\x00")
-    if len(frame) < 5 or frame[0] != 0x5A or frame[-1] != 0x5A:
-        return f"<unparsed {frame[:32].hex()}>"
-    body = frame[1:-1].replace(b"\x5b\x01", b"\x5a").replace(b"\x5b\x02", b"\x5b")
-    return body[2:-1].decode("utf-8", "replace")
-
-
-class Ryuo:
-    def __init__(self, path):
-        self.fd = os.open(path, os.O_RDWR)
-        self.seq = 0
-        self.verbose = False
-
-    def send(self, method, cmd, content=None, wait=0.3):
-        text = "" if content is None else json.dumps(content, separators=(",", ":"))
-        self.seq += 1
-        head = f"{method} {cmd} 1\r\nSeqNumber={self.seq}\r\nContentLength={len(text.encode())}\r\nContentType=json"
-        frame = encode((head + "\r\n\r\n" + text).encode())
-        if len(frame) > REPORT_LEN:
-            sys.exit(f"{cmd}: frame is {len(frame)} bytes, limit {REPORT_LEN}")
-        # hidraw wants the report ID first; this descriptor has none, so 0.
-        os.write(self.fd, b"\x00" + frame.ljust(REPORT_LEN, b"\x00"))
-        if self.verbose:
-            print(f">> {method} {cmd} {text}")
-        return self.read_replies(wait)
-
-    def read_replies(self, timeout):
-        replies = []
-        end = time.monotonic() + timeout
-        while (left := end - time.monotonic()) > 0:
-            if not select.select([self.fd], [], [], left)[0]:
-                break
-            reply = decode(os.read(self.fd, REPORT_LEN + 1))
-            replies.append(reply)
-            if self.verbose:
-                print("<<", reply.replace("\r\n", " | "))
-        return replies
-
-    def heartbeat(self):
-        self.send("STATE", "all", {"timestamp": int(time.time() * 1000)})
-
-
-def running_player():
-    """PID of a live `ryuo.py play`, or None. Ignores a stale pidfile."""
-    try:
-        with open(PIDFILE) as f:
-            pid = int(f.read())
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            cmdline = f.read()
-    except (OSError, ValueError):
-        return None
-    return pid if b"ryuo" in cmdline and b"play" in cmdline else None
-
-
-def stop_player(timeout=3.0):
-    """SIGTERM the running player and wait for it to exit. True if there was one."""
-    pid = running_player()
-    if pid is None:
-        return False
-    os.kill(pid, signal.SIGTERM)
-    end = time.monotonic() + timeout
-    while os.path.exists(f"/proc/{pid}") and time.monotonic() < end:
-        time.sleep(0.1)
-    return True
+    path = ryuo_proto.find_hidraw()
+    if path is None:
+        sys.exit("RYUO IV HID interface not found")
+    return path
 
 
 def adb(*args):
@@ -122,17 +40,9 @@ def adb(*args):
 
 
 def media_config(names, mode, ratio, sysinfo):
-    return {
-        "id": "Customization",
-        "screenMode": "Full Screen",
-        "ratio": ratio,
-        "playMode": mode,
-        "media": names,
-        "sysinfoDisplay": sysinfo,
-        "settings": None,
-        "timeZone": time.tzname[0] if not os.path.exists("/etc/localtime")
-        else os.path.realpath("/etc/localtime").split("zoneinfo/")[-1],
-    }
+    # Padded to 6 entries: with a shorter list HomeUI keeps the slots a previous ryuod run set,
+    # and this heartbeat carries only a timestamp, so they would show frozen values.
+    return screen_config(names, mode, ratio, sysinfo, None, pad=True)
 
 
 def main():
@@ -154,7 +64,7 @@ def main():
                     help='overlay fields, e.g. "CPU Temperature" "Date&Time"')
     pl.add_argument("--brightness", type=int, default=100, help="0-100, default 100")
 
-    sub.add_parser("stop", help="stop a running `play` and switch the cooler to standby")
+    sub.add_parser("stop", help="stop a running `play` or ryuod and switch the cooler to standby")
 
     br = sub.add_parser("brightness", help="set backlight, 0-100")
     br.add_argument("value", type=int)
@@ -172,7 +82,13 @@ def main():
 
     dev = Ryuo(find_hidraw())
     dev.verbose = a.verbose
+    try:
+        run(a, dev)
+    except FrameTooLarge as e:
+        sys.exit(str(e))
 
+
+def run(a, dev):
     if a.cmd == "info":
         for r in dev.send("POST", "conn", {"OS": "Linux"}, wait=1.5):
             print(r.split("\r\n\r\n", 1)[-1])
@@ -185,31 +101,34 @@ def main():
         if not stop_player():
             dev.send("POST", "disconn")
     elif a.cmd == "play":
-        # Two players would interleave heartbeats and configs; the newest one wins.
+        # Two drivers would interleave heartbeats and configs; the newest one wins.
         stop_player()
-        dev.send("POST", "conn", {"OS": "Linux"}, wait=1.5)
-        dev.send("POST", "waterBlockScreen", {"enable": True})
-        dev.send("POST", "waterBlockScreenId", media_config(a.names, a.mode, a.ratio, a.sysinfo))
-        # HomeUI only leaves standby on its own after a 5 s silence; a play started within 5 s
-        # of a "disconn" would stay behind the standby video. "resume" hides it unconditionally.
-        dev.send("POST", "power", {"event": "resume"})
-        # On reconnect the cooler restores whatever brightness it had in standby (50/255),
-        # so set it explicitly the way the Windows app does.
-        dev.send("POST", "brightness", {"value": a.brightness})
-        with open(PIDFILE, "w") as f:
-            f.write(str(os.getpid()))
+        # Claim the pidfile before the ~2.4 s setup below, so a ryuod started meanwhile finds
+        # and stops this process instead of running alongside it.
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-        print(f"playing {', '.join(a.names)}; stop with Ctrl-C or `ryuo.py stop`", flush=True)
+        write_pidfile()
         try:
-            while True:
+            dev.send("POST", "conn", {"OS": "Linux"}, wait=1.5)
+            dev.send("POST", "waterBlockScreen", {"enable": True})
+            dev.send("POST", "waterBlockScreenId", media_config(a.names, a.mode, a.ratio, a.sysinfo))
+            # HomeUI only leaves standby on its own after a 5 s silence; a play started within 5 s
+            # of a "disconn" would stay behind the standby video. "resume" hides it unconditionally.
+            dev.send("POST", "power", {"event": "resume"})
+            # On reconnect the cooler restores whatever brightness it had in standby (50/255),
+            # so set it explicitly the way the Windows app does.
+            dev.send("POST", "brightness", {"value": a.brightness})
+            print(f"playing {', '.join(a.names)}; stop with Ctrl-C or `ryuo.py stop`", flush=True)
+            # A driver that overwrote the pidfile owns the screen; leave without a disconn.
+            while not superseded():
                 dev.heartbeat()
                 time.sleep(1)
+            print("another driver took over; exiting", flush=True)
         except KeyboardInterrupt:
             pass
         finally:
-            dev.send("POST", "disconn")
-            if running_player() == os.getpid():
-                os.remove(PIDFILE)
+            if not superseded():
+                dev.send("POST", "disconn")
+            remove_pidfile()
 
 
 if __name__ == "__main__":

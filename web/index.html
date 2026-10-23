@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RYUO LCD Stats</title>
+<style>
+:root {
+  --bg: #f4f4f2; --surface: #ffffff; --surface-2: #ecebe8; --text: #1b1b1d; --muted: #66656a;
+  --border: #d8d7d3; --accent: #c8202a; --ok: #1f8a4c; --bad: #b3261e; --focus: #2b6cd8;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111113; --surface: #1b1b1e; --surface-2: #26262a; --text: #ececee; --muted: #9a99a0;
+    --border: #34343a; --accent: #ff4b55; --ok: #4cc57f; --bad: #ff6b60; --focus: #6aa0ff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111113; --surface: #1b1b1e; --surface-2: #26262a; --text: #ececee; --muted: #9a99a0;
+  --border: #34343a; --accent: #ff4b55; --ok: #4cc57f; --bad: #ff6b60; --focus: #6aa0ff;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+header {
+  position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center;
+}
+header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .01em; }
+#status { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 13px; }
+#status b { color: var(--text); font-weight: 600; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+#err { color: var(--bad); }
+main {
+  max-width: 1320px; margin: 0 auto; padding: 16px; display: grid; gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 1000px) {
+  main { grid-template-columns: minmax(0, 1.35fr) minmax(360px, 1fr); align-items: start; }
+  #previewCol { position: sticky; top: 64px; }
+}
+section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+section + section { margin-top: 16px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+.note { color: var(--muted); font-size: 12.5px; margin: 8px 0 0; }
+label { display: block; }
+.row { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: 8px; align-items: center; margin: 6px 0; }
+.row > span { color: var(--muted); font-size: 13px; }
+select, input[type=number], input[type=text], button {
+  font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 8px; min-width: 0; width: 100%;
+}
+button { width: auto; cursor: pointer; padding: 6px 14px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button:disabled { opacity: .5; cursor: default; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); }
+.inline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.mono { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: 12.5px; }
+#result { min-height: 1.4em; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+
+/* Panel preview: panel pixels mapped onto the box width via container units. */
+.panel {
+  --u: calc(100cqw / 2240);
+  container-type: inline-size; position: relative; width: 100%; aspect-ratio: 2240 / 1080;
+  border-radius: 8px; overflow: hidden; background:
+    radial-gradient(ellipse at 30% 40%, #2a1015 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 70%, #101a2a 0%, transparent 55%), #050506;
+  font-family: Bahnschrift, "DIN Alternate", "Roboto Condensed", "Arial Narrow", sans-serif;
+  font-stretch: condensed; line-height: 1.05; user-select: none;
+}
+.panel .bgnote { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #ffffff22; font-size: calc(48 * var(--u)); white-space: nowrap; }
+.slot { position: absolute; white-space: nowrap; }
+.slot .t { display: block; }
+.slot .v { font-weight: 600; }
+.slot.hidden { display: none; }
+.s1, .s2 { left: calc(120 * var(--u)); }
+.s1 { top: calc(274 * var(--u)); } .s2 { top: calc(662 * var(--u)); }
+.s1 .t, .s2 .t { font-size: calc(76 * var(--u)); }
+.s1 .v, .s2 .v { font-size: calc(120 * var(--u)); }
+.s1 .n, .s2 .n { font-size: calc(60 * var(--u)); margin-left: calc(12 * var(--u)); }
+.s3, .s5, .s4 { left: calc(1994 * var(--u)); transform: translateX(-50%); text-align: center; }
+.s3 { top: calc(202 * var(--u)); } .s5 { top: calc(767 * var(--u)); } .s4 { top: calc(419 * var(--u)); }
+.s3 .t, .s5 .t { font-size: calc(56 * var(--u)); }
+.s3 .v, .s5 .v { font-size: calc(80 * var(--u)); }
+.s3 .n, .s5 .n { font-size: calc(40 * var(--u)); margin-left: calc(8 * var(--u)); }
+.s4 .t { font-size: calc(76 * var(--u)); } .s4 .v { font-size: calc(110 * var(--u)); display: block; }
+.s4 .n { font-size: calc(55 * var(--u)); display: block; text-align: right; }
+.s6 { left: calc(1368 * var(--u)); top: calc(656 * var(--u)); }
+.s6 .t { font-size: calc(42 * var(--u)); } .s6 .v { font-size: calc(64 * var(--u)); display: block; }
+.s6 .n { font-size: calc(33 * var(--u)); display: block; }
+.filter { position: absolute; inset: 0; pointer-events: none; display: none;
+  background: radial-gradient(ellipse at 50% 120%, #bfc6cf 0%, #6b7380 35%, transparent 75%), linear-gradient(#ffffff10, #ffffff30); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+
+.media-list { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--surface-2); }
+.media-list h3 { font-size: 12px; color: var(--muted); margin: 6px 0 2px; font-weight: 600; }
+.media-list label { display: flex; gap: 8px; align-items: center; padding: 2px 0; overflow-wrap: anywhere; }
+.seg { display: inline-flex; justify-self: start; width: max-content; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg label { padding: 5px 12px; cursor: pointer; background: var(--surface-2); }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label:has(input:checked) { background: var(--accent); color: #fff; }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: -2px; }
+@media (max-width: 520px) { .row { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>RYUO IV LCD</h1>
+  <div id="status" aria-live="polite">
+    <span><span class="dot" id="dot"></span><b id="conn">connecting…</b></span>
+    <span id="fw"></span><span id="hb"></span><span id="ack"></span><span id="rec"></span><span id="err"></span>
+  </div>
+</header>
+<main>
+  <div id="previewCol">
+    <section>
+      <h2>Panel preview</h2>
+      <div class="panel" id="panel" role="img" aria-label="Preview of the pump LCD overlay">
+        <div class="bgnote">video plays here</div>
+      </div>
+      <div class="legend"><span>Slot geometry from HomeUI's layout; values from the last sample.</span><span id="sampled"></span></div>
+      <p class="note">The overlay hides for about 2 s every 5 min (device burn-in protection).</p>
+    </section>
+  </div>
+  <div>
+    <section>
+      <h2>Stats in each slot</h2>
+      <div id="slots"></div>
+      <p class="note" id="clipWarn" style="color: var(--bad)" aria-live="polite"></p>
+      <p class="note">Positions are fixed by the firmware; choose a stat's position by choosing its slot. "Fan Speed" items draw any label with the unit RPM.</p>
+    </section>
+    <section>
+      <h2>Overlay colours</h2>
+      <div class="row"><span>Title</span><div class="inline"><input type="color" id="titleColor" aria-label="Title colour"><span class="mono" id="titleHex"></span></div></div>
+      <div class="row"><span>Value and unit</span><div class="inline"><input type="color" id="contentColor" aria-label="Value and unit colour"><span class="mono" id="contentHex"></span></div></div>
+      <div class="row"><span>Filter</span><label class="inline"><input type="checkbox" id="filterOn"> coverage animation over the text</label></div>
+      <div class="row"><span>Filter opacity</span><div class="inline"><input type="range" id="opacity" min="0" max="100" step="1" style="flex:1"><span class="mono" id="opacityOut"></span></div></div>
+    </section>
+    <section>
+      <h2>Brightness</h2>
+      <div class="inline"><input type="range" id="brightness" min="0" max="102" step="1" list="bticks" style="flex:1" aria-label="Brightness 0 to 102"><span class="mono" id="brightOut"></span></div>
+      <datalist id="bticks"><option value="0"></option><option value="50"></option><option value="100" label="100 = 98 %"></option></datalist>
+      <p class="note">0–102 on the device scale; 100 = 98 % (250/255), 102 = full (255/255).</p>
+    </section>
+    <section>
+      <h2>Background media</h2>
+      <div class="media-list" id="media"></div>
+      <div class="row"><span>Play mode</span><select id="playMode"><option>Single</option><option>Cycle</option><option>Random</option></select></div>
+      <div class="inline"><button id="refresh" type="button">Refresh list</button><button id="play" class="primary" type="button">Play (restarts the video)</button></div>
+      <p class="note">Files already on the cooler. Order of play is the order of the list.</p>
+    </section>
+    <section>
+      <h2>Units</h2>
+      <div class="row"><span>Temperature</span>
+        <div class="seg" role="radiogroup" aria-label="Temperature unit">
+          <label><input type="radio" name="unit" value="Celsius">°C</label><label><input type="radio" name="unit" value="Fahrenheit">°F</label>
+        </div></div>
+      <div class="row"><span>Memory MHz</span><div class="inline"><input type="number" id="memMHz" min="0" max="20000" step="1" style="max-width:9em"><span class="note" style="margin:0">no Linux source without root; 0 hides "Memory Frequency"</span></div></div>
+    </section>
+    <div id="result" aria-live="polite"></div>
+  </div>
+</main>
+<script>
+"use strict";
+const SLOTS = [
+  "1 · left, upper", "2 · left, lower", "3 · right, top", "4 · right, middle", "5 · right, bottom", "6 · centre-right, lower",
+];
+const GROUPS = ["CPU", "GPU", "Memory", "Storage", "Board", "Clock", "Custom"];
+const WEEKS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+const $ = (id) => document.getElementById(id);
+let catalog = [], config = null, mediaLists = { preset: [], custom: [] }, stats = {};
+let items = ["", "", "", "", "", ""];
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  let j = null;
+  try { j = await r.json(); } catch (e) { /* non-JSON error page */ }
+  if (!r.ok || !j || !j.ok) throw new Error((j && j.error) || `HTTP ${r.status}`);
+  return j;
+}
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+function showResult(j, what) {
+  if (j instanceof Error) { $("result").textContent = `${what}: ${j.message}`; $("result").style.color = "var(--bad)"; return; }
+  const sent = j.sent && j.sent.length ? j.sent.join(", ") : "nothing sent";
+  const how = j.applied === false ? "saved; the cooler is not connected, applied on reconnect" : (j.acked ? "acked by the cooler" : "sent, no ack");
+  $("result").style.color = "var(--muted)";
+  $("result").textContent = `${what}: ${sent} — ${how}${j.restartsVideo ? " (video restarted)" : ""}`;
+}
+
+/* ---------- slots ---------- */
+function buildSlots() {
+  const box = $("slots"); box.textContent = "";
+  SLOTS.forEach((name, i) => {
+    const row = document.createElement("label"); row.className = "row";
+    const span = document.createElement("span"); span.textContent = name;
+    const sel = document.createElement("select"); sel.id = "slot" + i; sel.setAttribute("aria-label", "Slot " + name);
+    sel.addEventListener("change", () => { items[i] = sel.value; fillSlotOptions(); renderPreview(); sendOverlay(); });
+    row.append(span, sel); box.append(row);
+  });
+}
+function fillSlotOptions() {
+  const memZero = !config || !config.memoryMHz;
+  items.forEach((cur, i) => {
+    const sel = $("slot" + i); sel.textContent = "";
+    sel.append(new Option("(empty)", ""));
+    const known = new Set(catalog.map((c) => c.item));
+    for (const g of GROUPS) {
+      const og = document.createElement("optgroup"); og.label = g === "Custom" ? "Custom (unit RPM)" : g;
+      for (const c of catalog.filter((c) => c.group === g)) {
+        if (c.item === "Memory Frequency" && memZero && cur !== c.item) continue;
+        let text = c.item;
+        if (c.note && c.item === "GPU Usage") text += " (same as GPU Load)";
+        if (c.item === "GPU Power") text += " (drawn with °C unit)";
+        if (!c.available) text += " (no source)";
+        // Custom labels that clip are refused by the daemon; firmware titles are fixed and allowed.
+        const clips = (c.clipsIn || []).includes(i + 1), custom = c.item.startsWith("Fan Speed ");
+        if (clips) text += custom ? " (too wide for this slot)" : " (title cut off here)";
+        const o = new Option(text, c.item);
+        o.disabled = items.some((x, j) => j !== i && x === c.item) || (clips && custom && cur !== c.item);
+        og.append(o);
+      }
+      if (og.children.length) sel.append(og);
+    }
+    if (cur && !known.has(cur)) sel.append(new Option(cur + " (custom label)", cur));
+    sel.value = cur;
+  });
+  const cut = items.map((it, i) => {
+    const c = catalog.find((c) => c.item === it);
+    return c && (c.clipsIn || []).includes(i + 1) ? `slot ${i + 1} (${it})` : null;
+  }).filter(Boolean);
+  $("clipWarn").textContent = cut.length ? `Title runs past the panel's right edge: ${cut.join(", ")}. Slots 1, 2 and 6 have room for it.` : "";
+}
+
+/* ---------- preview ---------- */
+function buildPreview() {
+  const p = $("panel");
+  for (let i = 1; i <= 6; i++) {
+    const d = document.createElement("div"); d.className = "slot s" + i; d.id = "ps" + i;
+    d.innerHTML = '<span class="t"></span><span class="v"></span><span class="n"></span>';
+    p.append(d);
+  }
+  const f = document.createElement("div"); f.className = "filter"; f.id = "pfilter"; p.append(f);
+}
+function titleFor(item) {
+  if (item === "Date&Time") { const d = new Date(); return `${WEEKS[d.getDay()]} ${d.getDate()}`; }
+  if (item.startsWith("Fan Speed ")) return item.slice(10);
+  const c = catalog.find((c) => c.item === item);
+  return c ? c.title : "";
+}
+function renderPreview() {
+  if (!config) return;
+  const tc = $("titleColor").value, cc = $("contentColor").value;
+  items.forEach((item, i) => {
+    const d = $("ps" + (i + 1));
+    d.classList.toggle("hidden", !item);
+    if (!item) return;
+    const s = stats[item] || {};
+    let value = s.panel ?? "0", unit = s.unit ?? (item.startsWith("Fan Speed ") ? "RPM" : "");
+    if (item === "Date&Time") { const n = new Date(); value = n.toTimeString().slice(0, 5); unit = String(n.getSeconds()).padStart(2, "0"); }
+    d.children[0].textContent = titleFor(item); d.children[0].style.color = tc;
+    d.children[1].textContent = value; d.children[1].style.color = cc;
+    d.children[2].textContent = unit; d.children[2].style.color = cc;
+  });
+  const f = $("pfilter");
+  f.style.display = $("filterOn").checked ? "block" : "none";
+  f.style.opacity = $("opacity").value / 100;
+}
+
+/* ---------- controls ---------- */
+function applyConfig(c) {
+  config = c;
+  items = c.items.slice();
+  $("titleColor").value = c.titleColor.length === 9 ? "#" + c.titleColor.slice(3) : c.titleColor;
+  $("contentColor").value = c.contentColor.length === 9 ? "#" + c.contentColor.slice(3) : c.contentColor;
+  $("filterOn").checked = c.filter.on; $("opacity").value = c.filter.opacity;
+  $("brightness").value = c.brightness; $("playMode").value = c.playMode;
+  document.querySelectorAll('input[name=unit]').forEach((r) => { r.checked = r.value === c.tempUnit; });
+  $("memMHz").value = c.memoryMHz;
+  syncLabels(); fillSlotOptions(); renderMedia(); renderPreview();
+}
+function syncLabels() {
+  $("titleHex").textContent = $("titleColor").value.toUpperCase();
+  $("contentHex").textContent = $("contentColor").value.toUpperCase();
+  $("opacityOut").textContent = $("opacity").value + " %";
+  $("opacity").disabled = !$("filterOn").checked;
+  const b = +$("brightness").value;
+  $("brightOut").textContent = `${b} → ${Math.min(255, Math.floor(b * 2.5))}/255`;
+}
+const sendOverlay = debounce(async () => {
+  try {
+    const j = await api("/api/overlay", {
+      items, titleColor: $("titleColor").value.toUpperCase(), contentColor: $("contentColor").value.toUpperCase(),
+      filter: { on: $("filterOn").checked, opacity: +$("opacity").value },
+    });
+    config = j.config; showResult(j, "Overlay");
+  } catch (e) { showResult(e, "Overlay"); }
+}, 300);
+const sendBrightness = debounce(async () => {
+  try { const j = await api("/api/brightness", { value: +$("brightness").value }); showResult(j, "Brightness"); }
+  catch (e) { showResult(e, "Brightness"); }
+}, 150);
+async function sendPrefs(body) {
+  try {
+    const j = await api("/api/prefs", body);
+    // Take only the fields this call owns: j.config.items and colours predate a slot or colour
+    // edit still waiting in the 300 ms overlay debounce, and copying them would revert it.
+    for (const k of ["tempUnit", "memoryMHz", "sensors"]) config[k] = j.config[k];
+    document.querySelectorAll('input[name=unit]').forEach((r) => { r.checked = r.value === config.tempUnit; });
+    $("memMHz").value = config.memoryMHz;
+    fillSlotOptions(); renderPreview(); showResult(j, "Units"); refreshCatalog();
+  } catch (e) { showResult(e, "Units"); }
+}
+
+/* ---------- media ---------- */
+function renderMedia() {
+  const box = $("media"); box.textContent = "";
+  const chosen = config ? config.media : [];
+  for (const [key, label] of [["preset", "Preset (on the cooler)"], ["custom", "Custom (/sdcard/pcMedia)"]]) {
+    const h = document.createElement("h3"); h.textContent = label; box.append(h);
+    if (!mediaLists[key].length) { const e = document.createElement("div"); e.className = "note"; e.textContent = "none"; box.append(e); }
+    for (const name of mediaLists[key]) {
+      const l = document.createElement("label");
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = name; cb.checked = chosen.includes(name);
+      const s = document.createElement("span"); s.className = "mono"; s.textContent = name;
+      l.append(cb, s); box.append(l);
+    }
+  }
+}
+async function loadMedia(refresh) {
+  try { const j = await api("/api/media" + (refresh ? "?refresh=1" : "")); mediaLists = j; renderMedia(); if (refresh) $("result").textContent = `Media list from ${j.source}`; }
+  catch (e) { showResult(e, "Media list"); }
+}
+async function play() {
+  const media = [...$("media").querySelectorAll("input:checked")].map((c) => c.value);
+  if (!media.length) { showResult(new Error("pick at least one file"), "Play"); return; }
+  try { const j = await api("/api/media/select", { media, playMode: $("playMode").value }); config = j.config; showResult(j, "Play"); }
+  catch (e) { showResult(e, "Play"); }
+}
+
+/* ---------- polling ---------- */
+function age(ms) { return ms == null ? "—" : (ms < 10000 ? (ms / 1000).toFixed(1) + " s" : Math.round(ms / 1000) + " s"); }
+async function pollState() {
+  try {
+    const j = await api("/api/state"), d = j.device;
+    $("dot").className = "dot " + (d.connected ? "ok" : "bad");
+    $("conn").textContent = d.connected ? "connected" : "not connected";
+    $("fw").textContent = d.firmware ? `${d.product} ${d.firmware} · ${d.hidraw}` : "";
+    $("hb").textContent = `heartbeat ${age(d.lastHeartbeatMs)} ago`;
+    $("ack").textContent = `HomeUI ack ${age(d.lastHomeuiAckMs)} ago`;
+    $("rec").textContent = d.recoveries ? `recoveries ${d.recoveries}` : "";
+    $("err").textContent = d.lastError && !d.connected ? d.lastError : "";
+    if (!config) applyConfig(j.config);
+  } catch (e) {
+    $("dot").className = "dot bad"; $("conn").textContent = "daemon unreachable"; $("err").textContent = e.message;
+  }
+}
+async function pollStats() {
+  try {
+    const j = await api("/api/stats"); stats = j.values;
+    $("sampled").textContent = j.sampledAt ? "sampled " + new Date(j.sampledAt).toLocaleTimeString() : "";
+    renderPreview();
+  } catch (e) { /* the state poll reports it */ }
+}
+async function refreshCatalog() {
+  try { catalog = (await api("/api/catalog")).items; if (config) fillSlotOptions(); } catch (e) { /* retried */ }
+}
+
+/* ---------- wire up ---------- */
+buildSlots(); buildPreview();
+for (const id of ["titleColor", "contentColor", "filterOn", "opacity"]) {
+  $(id).addEventListener("input", () => { syncLabels(); renderPreview(); sendOverlay(); });
+}
+$("brightness").addEventListener("input", () => { syncLabels(); sendBrightness(); });
+$("refresh").addEventListener("click", () => loadMedia(true));
+$("play").addEventListener("click", play);
+document.querySelectorAll('input[name=unit]').forEach((r) => r.addEventListener("change", () => sendPrefs({ tempUnit: r.value })));
+$("memMHz").addEventListener("change", () => {
+  const v = parseInt($("memMHz").value, 10);
+  if (Number.isInteger(v)) sendPrefs({ memoryMHz: v });
+});
+(async () => {
+  await refreshCatalog();
+  await pollState();
+  await loadMedia(false);
+  await pollStats();
+  setInterval(pollState, 1000);
+  setInterval(pollStats, 1000);
+  setInterval(refreshCatalog, 15000);
+})();
+</script>
+</body>
+</html>

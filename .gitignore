@@ -2,6 +2,8 @@
 re/apk/
 re/src/
 re/jadx/
+# Clones of other people's RYUO IV projects, read for research only
+re/ext/
 # Panel screenshots show whatever media was playing
 re/*.png
 __pycache__/
