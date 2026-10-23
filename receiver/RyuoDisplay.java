@@ -77,6 +77,11 @@ public class RyuoDisplay {
             AccessUnitReader reader = new AccessUnitReader(in);
             byte[] au;
             while ((au = reader.next()) != null) {
+                // A sender may put the next frame's delimiter right after each frame, so the
+                // stream can end with a delimiter and nothing else; the decoder rejects that.
+                if (!hasPictureData(au)) {
+                    continue;
+                }
                 int index = codec.dequeueInputBuffer(-1);
                 ByteBuffer buf = codec.getInputBuffer(index);
                 buf.clear();
@@ -86,9 +91,27 @@ public class RyuoDisplay {
         } finally {
             output.interrupt();
             output.join();
-            codec.stop();
-            codec.release();
+            // release() must run even when stop() throws (a codec in its error state does).
+            // A component that is never released stays allocated in the codec service after
+            // this process dies, and a few of those leave no decoder for anyone, HomeUI included.
+            try {
+                codec.stop();
+            } catch (RuntimeException e) {
+                log("codec stop failed: " + e);
+            } finally {
+                codec.release();
+            }
         }
+    }
+
+    /** True if the access unit holds a NAL unit other than an access unit delimiter. */
+    static boolean hasPictureData(byte[] au) {
+        for (int i = 0; i + 3 < au.length; i++) {
+            if (au[i] == 0 && au[i + 1] == 0 && au[i + 2] == 1 && ((au[i + 3] >> 1) & 0x3f) != NAL_AUD) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Renders every decoded frame as soon as it is ready; shows the layer on the first one. */
