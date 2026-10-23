@@ -79,7 +79,7 @@ export function defaultConfig() {
 
 /** ryuod.Display.status() with the switch off. */
 export function defaultDisplay() {
-  return { on: false, state: "off", fps: null, mbps: null, message: null, error: null, retryInS: null };
+  return { on: false, state: "off", fps: null, mbps: null, message: null, error: null, pointer: null, retryInS: null };
 }
 
 export function defaultDevice() {

@@ -57,6 +57,24 @@ describe("second display", () => {
     expect($("displayDot").className).toBe("dot ok");
   });
 
+  it("says when the mouse pointer is shown", async () => {
+    await openPage(makeDaemon({ display: { on: true, state: "on", fps: 59.8, mbps: 9.7, pointer: { shown: true, reason: null } } }));
+    expect(shown("displayPointer")).toBe(true);
+    expect($("displayPointer").textContent).toBe("Mouse pointer: shown on the panel.");
+  });
+
+  it("says why there is no mouse pointer and how to get it", async () => {
+    await openPage(makeDaemon({ display: { on: true, state: "on", fps: 59.8, mbps: 9.7, pointer: { shown: false, reason: "screen selection was cancelled" } } }));
+    expect($("displayPointer").textContent).toBe(
+      "No mouse pointer on the panel: screen selection was cancelled. Turn the switch off and on to choose the screen again.",
+    );
+  });
+
+  it("hides the pointer line while off", async () => {
+    await openPage(makeDaemon({ display: { on: false, state: "off", pointer: { shown: true, reason: null } } }));
+    expect(shown("displayPointer")).toBe(false);
+  });
+
   it("explains 0 frames/s on a still desktop", async () => {
     await openPage(makeDaemon({ display: { on: true, state: "on", fps: 0, mbps: 0 } }));
     expect($("displayText").textContent).toBe("On. No frames sent in the last 5 s: nothing on the virtual monitor changed.");

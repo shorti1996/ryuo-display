@@ -29,7 +29,7 @@ Other distributions, desktops and firmware versions have not been tried.
 | `ffmpeg` and `ffprobe` with the `libx265` encoder | uploading videos the panel can't decode as they are | Fedora's own `ffmpeg-free` has no `libx265`: install `ffmpeg` from RPM Fusion (`sudo dnf swap ffmpeg-free ffmpeg --allowerasing` if `ffmpeg-free` is installed). Arch and Debian/Ubuntu `ffmpeg` include it. With a working NVIDIA GPU, `hevc_nvenc` is used instead. The service runs `/usr/bin/python3`, so the `imageio-ffmpeg` wheel in the uv environment never reaches it. |
 | a StatusNotifier system tray | tray icon | KDE Plasma has one. GNOME needs the AppIndicator extension. |
 | `nvidia-smi` (optional) | NVIDIA GPU stats | AMD GPUs are read from sysfs |
-| KDE Plasma 6 on Wayland, an NVIDIA GPU (optional) | [second display](#second-display) | Fedora packages: `krfb`, `util-linux-core` (`unshare`), `pipewire-utils`, `pipewire-gstreamer`, `gstreamer1-plugins-base`, `gstreamer1-plugins-bad-free` (its nvcodec plugin has the `nvh265enc` encoder), `python3-gobject-base` (PyGObject), `android-tools` (adb). The encoder is NVENC, so other GPUs cannot run it. Without PyGObject a window moved onto the panel after the start is shown at about 1 frame/s. |
+| KDE Plasma 6 on Wayland, an NVIDIA GPU (optional) | [second display](#second-display) | Fedora packages: `krfb`, `util-linux-core` (`unshare`), `pipewire-utils`, `pipewire-gstreamer`, `gstreamer1-plugins-base`, `gstreamer1-plugins-bad-free` (its nvcodec plugin has the `nvh265enc` encoder), `python3-gobject-base` (PyGObject), `android-tools` (adb). The encoder is NVENC, so other GPUs cannot run it. Without PyGObject the panel shows no mouse pointer, and a window moved onto the panel after the start is shown at about 1 frame/s. |
 | `uv`, `node`/`npm` | development only | tests and lint |
 
 `make deps` checks all of these and prints the Fedora package names for anything missing. The
@@ -115,11 +115,26 @@ instead of adding a second icon.
 Turn on **Panel as monitor** under Second display on the control page (or **Use panel as second
 display** in the tray). Within about 5 s the desktop gets a 2240×1080 virtual monitor named
 Virtual-RYUO, and the panel shows it in place of the background video and stats overlay. Windows
-dragged past the right edge of your main monitor appear on the panel. The mouse pointer is not
-drawn on the panel.
+dragged past the right edge of your main monitor appear on the panel, with the mouse pointer.
+
+The first time, Plasma shows a **Share screen** dialog. Display mode captures the virtual monitor
+through the desktop's screen-sharing portal, because that is the capture KWin draws the pointer
+into; Plasma asks before any program may capture a screen that way. In the dialog:
+
+1. Select **Virtual-RYUO** (not your main monitor).
+2. Tick **Allow restoring on future sharing requests**.
+3. Click **Share**.
+
+The portal hands back a restore token, kept in `~/.config/ryuo/display-portal-token` (readable only
+by you), so later starts, including the one at login, skip the dialog. The dialog comes back when
+that token no longer works, for example after the token file was deleted or Plasma forgot the
+permission. If you cancel the dialog, or nobody answers it within 120 s, the panel still shows the
+virtual monitor, without the pointer, and the page says why; turning the switch off and on asks
+again. To be asked again on the next start, delete the token: `rm ~/.config/ryuo/display-portal-token`.
 
 - The page shows the state: Starting, then On with the frames/s and Mb/s sent to the panel, averaged
-  over 5 s. A still desktop sends no frames, and the panel keeps the last one.
+  over 5 s, and whether the pointer is shown. A still desktop sends no frames, and the panel keeps
+  the last one.
 - Brightness keeps working, and the daemon keeps its heartbeat going. Without it the panel would drop
   to standby and to 50/255 backlight.
 - Turning it off removes the virtual monitor, which takes up to about 10 s; windows on it move to the
@@ -132,7 +147,8 @@ drawn on the panel.
   reconnects.
 
 The daemon runs `ryuo_display.py` for this, which can also run on its own from a terminal:
-`/usr/bin/python3 ryuo_display.py --help` (the daemon must have the switch off). It pushes
+`/usr/bin/python3 ryuo_display.py --help` (the daemon must have the switch off; `--no-pointer`
+skips the portal and its dialog). It pushes
 `receiver/receiver.jar` to the cooler over adb and streams HEVC to it; `make receiver` rebuilds
 the jar.
 

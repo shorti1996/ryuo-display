@@ -123,8 +123,47 @@ def test_off_until_switched_on(fake, displays):
         "mbps": None,
         "message": None,
         "error": None,
+        "pointer": None,
         "retryInS": None,
     }
+
+
+@pytest.mark.parametrize(
+    "line, pointer",
+    [
+        ("pointer: shown", {"shown": True, "reason": None}),
+        (
+            "pointer: not shown: screen selection was cancelled",
+            {"shown": False, "reason": "screen selection was cancelled"},
+        ),
+        ("pointer: not shown: turned off with --no-pointer", {"shown": False, "reason": "turned off with --no-pointer"}),
+        ("streaming to the panel at 10 Mb/s; stop with Ctrl-C", None),
+    ],
+)
+def test_display_pointer(line, pointer):
+    assert ryuod.display_pointer(line) == pointer
+
+
+def test_pointer_status_is_reported_and_not_shown_as_the_message(fake, displays):
+    d = make(fake)
+    displays.append(d)
+    d.set(True)
+    wait_until(state_is(d, "on"))
+    assert d.status()["pointer"] == {"shown": True, "reason": None}
+    d.set(False)
+    wait_until(state_is(d, "off"))
+    assert d.status()["pointer"] is None
+
+
+def test_pointer_fallback_reason_is_reported(fake, displays):
+    fake.mode("nopointer")
+    d = make(fake)
+    displays.append(d)
+    d.set(True)
+    wait_until(state_is(d, "on"))
+    st = d.status()
+    assert st["pointer"] == {"shown": False, "reason": "screen selection was cancelled"}
+    assert st["message"] == "streaming to the panel at 10 Mb/s; stop with Ctrl-C"
 
 
 def test_on_reports_frame_rate_then_off_stops_the_child_cleanly(fake, displays, logs):

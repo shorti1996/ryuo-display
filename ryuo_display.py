@@ -13,27 +13,32 @@ What runs, in start order (teardown goes in reverse):
      shows no dialog. krfb also serves the output over VNC on all interfaces; it runs inside its
      own empty network namespace (unshare --user --net), so that VNC port is reachable from
      nowhere.
-  3. KWin publishes the output as a PipeWire video stream for krfb. gst-launch-1.0 opens its own
-     consumer (pipewiresrc, not auto-connected); pw-link removes krfb's link to KWin's stream and
-     links this consumer in its place. GStreamer imports the frames as DMA-BUFs into OpenGL and
-     nvh265enc encodes them on the GPU, with an access unit delimiter before every frame, which
-     is where the receiver cuts frames.
-  4. gst-launch hands each encoded frame to this process in a GDP packet (gdppay). This process
+  3. The desktop portal (org.freedesktop.portal.ScreenCast) asks KWin for a second stream of the
+     same output, with the mouse pointer drawn into the frames. Plasma asks the user once which
+     screen to share; the restore token it returns is kept in ~/.config/ryuo/display-portal-token
+     (mode 0600), so later starts skip the dialog. Without the portal (dialog cancelled or not
+     answered within --dialog-timeout s, a stale token, --no-pointer) krfb's stream is used and
+     the pointer is not shown. The tool prints "pointer: shown" or "pointer: not shown: <reason>".
+  4. gst-launch-1.0 opens its own consumer (pipewiresrc, not auto-connected); pw-link removes the
+     links to the chosen stream and to krfb's and links this consumer. GStreamer imports the
+     frames as DMA-BUFs into OpenGL and nvh265enc encodes them on the GPU, with an access unit
+     delimiter before every frame, which is where the receiver cuts frames.
+  5. gst-launch hands each encoded frame to this process in a GDP packet (gdppay). This process
      sends it to the forwarded TCP port followed at once by the next frame's delimiter (see
      panel_frame()), and prints the frame rate and bitrate every 5 s.
-  5. A KWin script reports windows that come onto the output, and the tool then restarts KWin's
+  6. A KWin script reports windows that come onto the output, and the tool then restarts KWin's
      stream with a fresh encoder (see "windows arriving on the output" below): on KWin 6.7.5 such
-     windows are otherwise captured at about 1 frame/s.
+     windows are otherwise captured at about 1 frame/s, with either stream.
 
 KWin sends a frame only when something on the virtual output changes: a still desktop sends
-nothing and the panel keeps the last frame. The mouse pointer is not drawn on the panel, because
-krfb requests it from KWin as metadata, which pipewiresrc ignores.
+nothing and the panel keeps the last frame.
 
 Needs: adb, krfb-virtualmonitor (krfb), unshare (util-linux), pw-dump and pw-link (pipewire-utils),
 gst-launch-1.0 with pipewiresrc, glupload and nvh265enc (gstreamer1-plugins-bad with nvcodec), an
 NVIDIA GPU, and kscreen-doctor for --scale. Python: the standard library, plus PyGObject
-(python3-gobject, imported as gi) for the D-Bus side of the window watch; without it the tool
-still runs, and windows that arrive after the start stay at about 1 frame/s.
+(python3-gobject, imported as gi) for D-Bus: the desktop portal and the window watch. Without it
+the tool still runs, without the pointer, and windows that arrive after the start stay at about
+1 frame/s.
 """
 
 import argparse
@@ -79,6 +84,8 @@ GRAPH_TIMEOUT = 10  # s to wait for each PipeWire node to appear
 STATS_EVERY = 5  # s between frame-rate and bitrate lines
 SEND_TIMEOUT = 10  # s a write to the receiver may block before the stream counts as stalled
 STOP_TIMEOUT = 3  # s a child gets after SIGTERM before SIGKILL
+LINK_ATTEMPTS = 3  # encoders tried before giving up on taking KWin's stream
+LINK_TIMEOUT = 3  # s for a new link to KWin's stream to become active
 RELEASE_TIMEOUT = 5  # s the receiver gets to release the decoder after the stream closes
 
 REQUIRED = ("adb", "krfb-virtualmonitor", "unshare", "pw-dump", "pw-link", "gst-launch-1.0")
@@ -128,8 +135,23 @@ def parse_args(argv=None):
         help=f"local TCP port forwarded to the receiver, 1024-65535 (default {DEFAULT_PORT})",
     )
     p.add_argument("-s", "--serial", help="adb serial of the cooler, when more than one adb device is connected")
+    p.add_argument(
+        "--no-pointer",
+        action="store_true",
+        help="capture without the mouse pointer and without the desktop portal (no screen-selection dialog)",
+    )
+    p.add_argument(
+        "--dialog-timeout",
+        type=float,
+        default=DIALOG_TIMEOUT,
+        metavar="S",
+        help=f"seconds to wait for an answer in the screen-selection dialog before going on without the pointer "
+        f"(default {DIALOG_TIMEOUT})",
+    )
     p.add_argument("-v", "--verbose", action="store_true", help="also print krfb-virtualmonitor's output")
     a = p.parse_args(argv)
+    if a.dialog_timeout <= 0:
+        p.error("--dialog-timeout must be more than 0 s")
     if not BITRATE_RANGE[0] <= a.bitrate <= BITRATE_RANGE[1]:
         p.error(f"--bitrate must be between {BITRATE_RANGE[0]} and {BITRATE_RANGE[1]} Mb/s")
     if a.scale is not None and (not SCALE_RANGE[0] <= a.scale <= SCALE_RANGE[1] or (a.scale * 4) % 1):
@@ -276,6 +298,16 @@ def kwin_output_port(dump, pid):
         if info.get("input-node-id") in nodes and info.get("output-node-id") in sources:
             return info.get("output-port-id"), link["id"]
     return None
+
+
+def link_active(dump, out_port, in_port):
+    """True if a link from out_port to in_port exists and is active (format and buffers agreed)."""
+    return any(
+        (o.get("info") or {}).get("output-port-id") == out_port
+        and (o.get("info") or {}).get("input-port-id") == in_port
+        and (o.get("info") or {}).get("state") == "active"
+        for o in _of_type(dump, "Link")
+    )
 
 
 def links_from(dump, port_id):
@@ -536,17 +568,34 @@ workspace.windowRemoved.connect(function (w) {{
 """
 
 
+_glib_loop = None
+_glib_lock = threading.Lock()
+
+
+def glib():
+    """PyGObject's GLib and Gio, with a GLib main loop running on a thread of its own so D-Bus
+    signals and method calls reach this process. Raises ImportError or ValueError without
+    PyGObject."""
+    global _glib_loop
+    import gi
+
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio, GLib
+
+    with _glib_lock:
+        if _glib_loop is None:
+            _glib_loop = GLib.MainLoop()
+            threading.Thread(target=_glib_loop.run, daemon=True, name="glib").start()
+    return GLib, Gio
+
+
 class WindowWatch:
     """Loads kwin_script() into KWin and calls on_event(kind) for each report. Uses PyGObject
     (gi.repository.Gio) for D-Bus: the script reaches this process by calling a method on a bus
     name it owns, and the standard library has no D-Bus."""
 
     def __init__(self, output, on_event):
-        import gi
-
-        gi.require_version("Gio", "2.0")
-        from gi.repository import Gio, GLib
-
+        GLib, Gio = glib()
         self.GLib, self.on_event = GLib, on_event
         self.service = f"{DBUS_IFACE}.pid{os.getpid()}"
         self.plugin = f"ryuo-display-{os.getpid()}"
@@ -560,8 +609,6 @@ class WindowWatch:
             "RequestName",
             GLib.Variant("(su)", (self.service, 4)),
         )
-        self.loop = GLib.MainLoop()
-        threading.Thread(target=self.loop.run, daemon=True).start()
         self.dir = tempfile.mkdtemp(prefix="ryuo-display-", dir=os.environ.get("XDG_RUNTIME_DIR"))
         path = os.path.join(self.dir, "windows.js")
         with open(path, "w") as f:
@@ -602,8 +649,176 @@ class WindowWatch:
                 "ReleaseName",
                 self.GLib.Variant("(s)", (self.service,)),
             )
-        self.loop.quit()
         shutil.rmtree(self.dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- pointer: capture through the desktop portal
+
+# krfb asks KWin for the pointer as metadata, so its stream has no pointer in the frames. The
+# desktop portal's ScreenCast can ask KWin for a stream of the same output with the pointer drawn
+# in. Plasma shows its screen-selection dialog for that unless the request carries a restore token
+# from an earlier selection that the user allowed to be restored; the token is kept in TOKEN_FILE.
+PORTAL_BUS = "org.freedesktop.portal.Desktop"
+PORTAL_PATH = "/org/freedesktop/portal/desktop"
+PORTAL_APP_ID = "org.rogryuolcd.Display"  # registered with the portal, so tokens survive any launcher
+SOURCE_MONITOR = 1  # ScreenCast source type
+CURSOR_EMBEDDED = 2  # ScreenCast cursor mode: drawn into the frames
+PERSIST_UNTIL_REVOKED = 2  # ScreenCast persist mode
+DIALOG_TIMEOUT = 120  # s the screen-selection dialog may stay unanswered before the run goes on without a pointer
+DIALOG_AFTER = 2  # s without an answer after which the dialog is assumed to be on screen
+RESPONSE_REASONS = {1: "screen selection was cancelled", 2: "the desktop portal could not start the screen capture"}
+
+
+def token_path(environ=None):
+    environ = os.environ if environ is None else environ
+    base = environ.get("XDG_CONFIG_HOME") or os.path.join(environ.get("HOME", os.path.expanduser("~")), ".config")
+    return os.path.join(base, "ryuo", "display-portal-token")
+
+
+def read_token(path):
+    try:
+        with open(path) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def write_token(path, token):
+    """Store token readable by this user only (0600); None removes the file."""
+    if token is None:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(path)
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(token + "\n")
+    os.replace(tmp, path)
+
+
+def select_sources_options(token):
+    """SelectSources options as {key: (GVariant type, value)}: one monitor, pointer drawn in, and a
+    selection the user may allow to be restored without the dialog next time."""
+    opts = {
+        "types": ("u", SOURCE_MONITOR),
+        "multiple": ("b", False),
+        "cursor_mode": ("u", CURSOR_EMBEDDED),
+        "persist_mode": ("u", PERSIST_UNTIL_REVOKED),
+    }
+    if token:
+        opts["restore_token"] = ("s", token)
+    return opts
+
+
+def stream_node(results):
+    """The PipeWire node id of the one stream in a Start response's results."""
+    streams = results.get("streams") or []
+    if len(streams) != 1:
+        raise PortalError(f"the desktop portal returned {len(streams)} streams instead of one")
+    return int(streams[0][0])
+
+
+def node_output_port(dump, node_id):
+    """(media.name, output port id) of PipeWire node node_id, or None while it has no output port."""
+    nodes = {o["id"]: _props(o) for o in _of_type(dump, "Node")}
+    if node_id not in nodes:
+        return None
+    for port in _of_type(dump, "Port"):
+        if (port.get("info") or {}).get("direction") == "output" and _props(port).get("node.id") == node_id:
+            return nodes[node_id].get("media.name"), port["id"]
+    return None
+
+
+class PortalError(Exception):
+    """The portal capture is not available; the text is the reason the panel shows no pointer."""
+
+
+class PortalCapture:
+    """A ScreenCast session of the desktop portal for one monitor with the pointer drawn in.
+
+    start() returns the PipeWire node id of KWin's stream. It shows Plasma's screen-selection
+    dialog when the stored restore token is missing or no longer valid, waits up to timeout s for
+    an answer, and stores the new token the portal returns (tokens are single-use). close() ends
+    the session, which ends KWin's stream."""
+
+    def __init__(self, path, timeout=DIALOG_TIMEOUT, on_dialog=None):
+        try:
+            self.GLib, Gio = glib()
+        except (ImportError, ValueError) as e:
+            raise PortalError(f"PyGObject (python3-gobject) is missing: {e}") from e
+        self.path, self.timeout, self.on_dialog = path, timeout, on_dialog
+        self.session = None
+        self.requests = 0
+        try:
+            # A private connection: Registry.Register must come before any other portal call on it.
+            address = Gio.dbus_address_get_for_bus_sync(Gio.BusType.SESSION, None)
+            flags = Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION
+            self.conn = Gio.DBusConnection.new_for_address_sync(address, flags, None, None)
+        except self.GLib.Error as e:
+            raise PortalError(f"no D-Bus session bus: {e.message}") from e
+        with contextlib.suppress(PortalError):
+            # Older portals lack the registry; the token is then kept under the launcher's app id.
+            self._call("org.freedesktop.host.portal.Registry", "Register", "(sa{sv})", (PORTAL_APP_ID, {}))
+
+    def _call(self, iface, method, sig, args, path=PORTAL_PATH):
+        try:
+            return self.conn.call_sync(PORTAL_BUS, path, iface, method, self.GLib.Variant(sig, args), None, 0, 10000, None)
+        except self.GLib.Error as e:
+            raise PortalError(f"desktop portal {method} failed: {e.message}") from e
+
+    def _request(self, method, sig, args, options, timeout):
+        """Call a portal method that answers through a Request object; return its results."""
+        GLib = self.GLib
+        self.requests += 1
+        token = f"ryuo{os.getpid()}_{self.requests}"
+        sender = self.conn.get_unique_name()[1:].replace(".", "_")
+        handle = f"/org/freedesktop/portal/desktop/request/{sender}/{token}"
+        answer, done = [], threading.Event()
+
+        def response(conn, sender_name, path, iface, signal_name, params, *user):
+            answer.append(params.unpack())
+            done.set()
+
+        sub = self.conn.signal_subscribe(PORTAL_BUS, "org.freedesktop.portal.Request", "Response", handle, None, 0, response)
+        try:
+            opts = {"handle_token": GLib.Variant("s", token)}
+            opts.update({k: GLib.Variant(t, v) for k, (t, v) in options.items()})
+            self._call("org.freedesktop.portal.ScreenCast", method, sig, (*args, opts))
+            if not done.wait(min(DIALOG_AFTER, timeout)) and self.on_dialog is not None:
+                self.on_dialog()
+            if not done.wait(max(0, timeout - DIALOG_AFTER)):
+                with contextlib.suppress(PortalError):
+                    self._call("org.freedesktop.portal.Request", "Close", "()", (), path=handle)
+                raise PortalError(f"no answer to the screen selection within {timeout:g} s")
+        finally:
+            self.conn.signal_unsubscribe(sub)
+        code, results = answer[0]
+        if code != 0:
+            raise PortalError(RESPONSE_REASONS.get(code, f"the desktop portal answered {code}"))
+        return results
+
+    def start(self):
+        results = self._request("CreateSession", "(a{sv})", (), {"session_handle_token": ("s", f"ryuo{os.getpid()}")}, 10)
+        self.session = results["session_handle"]
+        token = read_token(self.path)
+        self._request("SelectSources", "(oa{sv})", (self.session,), select_sources_options(token), 10)
+        try:
+            results = self._request("Start", "(osa{sv})", (self.session, ""), {}, self.timeout)
+        except PortalError:
+            # The portal shows the dialog only when the token did not restore; either way it is spent.
+            write_token(self.path, None)
+            raise
+        write_token(self.path, results.get("restore_token"))
+        return stream_node(results)
+
+    def close(self):
+        if self.session is not None:
+            with contextlib.suppress(PortalError):
+                self._call("org.freedesktop.portal.Session", "Close", "()", (), path=self.session)
+            self.session = None
+        with contextlib.suppress(Exception):
+            self.conn.close_sync(None)
 
 
 class RestartTimer:
@@ -741,6 +956,7 @@ class Session:
         self.failed = threading.Event()
         self.reason = None
         self.stats = Stats()
+        self.portal_used = False
 
     def fail(self, reason):
         if not self.failed.is_set():
@@ -838,6 +1054,46 @@ class Session:
             run_tool(scale_cmd(self.a.name, self.a.scale), "kscreen-doctor")
         return source
 
+    def pointer_source(self, krfb_source):
+        """The stream to encode: the desktop portal's, which has the pointer drawn in, or krfb's
+        when the portal capture is unavailable (the reason is printed as a "pointer:" line)."""
+        out = output_name(self.a.name)
+        self.portal_used = False
+        if self.a.no_pointer:
+            say("pointer: not shown: turned off with --no-pointer")
+            return krfb_source
+
+        def dialog():
+            say(
+                f"waiting for the screen-sharing dialog: choose {out}, allow restoring, then Share "
+                f"(goes on without the pointer after {self.a.dialog_timeout:g} s)"
+            )
+
+        path = token_path()
+        try:
+            portal = PortalCapture(path, self.a.dialog_timeout, dialog)
+            self.stack.callback(portal.close)
+            node = portal.start()
+            found = wait_for(
+                "PipeWire stream from the desktop portal",
+                lambda: node_output_port(pw_dump(), node),
+                self.krfb,
+                GRAPH_TIMEOUT,
+            )
+            media, port = found
+            if media != f"kwin-screencast-{out}":
+                write_token(path, None)
+                portal.close()
+                raise PortalError(f"the screen selected in the dialog was not {out} (got {media})")
+        except PortalError as e:
+            say(f"pointer: not shown: {e}")
+            return krfb_source
+        # krfb's stream is not used; without a link KWin stops rendering it.
+        subprocess.run(["pw-link", "-d", str(krfb_source[1])], stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+        self.portal_used = True
+        say("pointer: shown")
+        return port, None
+
     def stop_monitor(self, krfb):
         krfb.stop()
         say(f"virtual monitor {output_name(self.a.name)} removed")
@@ -854,13 +1110,17 @@ class Session:
         self.source_port = source[0]
         self.relay = Relay(sock, self.stats, self.fail)
         self.generation = 0
+        self.link_retries = 0
         self.gst = self.spare = None
         self.stack.callback(self.stop_encoders)
         self.relay.start()
-        self.switch_to(self.start_encoder())
-        # A restart has to wait for the replacement encoder to start (about 1.5 s for GStreamer's
-        # OpenGL and CUDA setup), so one is kept ready, idle and unlinked.
+        # A restart, or a retry when linking fails, would otherwise wait for a new encoder to start
+        # (about 1.5 s for GStreamer's OpenGL and CUDA setup), so one is kept ready, idle and unlinked.
+        first = self.start_encoder()
         self.spare = self.start_encoder()
+        self.switch_to(first)
+        if self.spare is None:
+            self.spare = self.start_encoder()
         say(f"streaming to the panel at {self.a.bitrate:g} Mb/s; stop with Ctrl-C")
 
         self.restarts = RestartTimer()
@@ -881,19 +1141,26 @@ class Session:
         node_name = f"ryuo-display-{os.getpid()}-{self.generation}"
         read_fd, write_fd = os.pipe()
         retired = threading.Event()
+        quiet = threading.Event()  # set until the encoder has taken the stream; a failed try is not news
+        quiet.set()
 
         def line(text):
-            if not retired.is_set():
+            if not retired.is_set() and not quiet.is_set():
                 say(f"gst-launch-1.0: {text}")
 
         try:
-            gst = Child("gst-launch-1.0", gst_cmd(node_name, write_fd, self.a.bitrate), line, pass_fds=(write_fd,))
+            gst = Child(
+                "gst-launch-1.0",
+                gst_cmd(node_name, write_fd, self.a.bitrate),
+                line,
+                pass_fds=(write_fd,),
+            )
         except DisplayError:
             os.close(read_fd)
             raise
         finally:
             os.close(write_fd)
-        gst.node_name, gst.retired, gst.read_fd = node_name, retired, read_fd
+        gst.node_name, gst.retired, gst.quiet, gst.read_fd = node_name, retired, quiet, read_fd
         return gst
 
     def switch_to(self, gst):
@@ -905,22 +1172,55 @@ class Session:
         linking gst restarts it: the panel gets the current desktop at once, and every window now on
         the output is captured at the full rate. krfb keeps running without frames, which also saves
         the CPU time of its VNC copy. The old encoder fails when its link goes; its output is muted
-        and it is stopped."""
-        sink = wait_for(
-            "PipeWire input from gst-launch-1.0", lambda: input_port(pw_dump(), gst.node_name), gst, GRAPH_TIMEOUT
-        )
+        and it is stopped.
+
+        Linking can fail: on a stream KWin has just created (the portal's), KWin first offers one
+        DMA-BUF modifier and moves to another once its test allocation fails, and pipewiresrc
+        sometimes rejects the first one ("unhandled format") and exits. A fresh encoder then gets
+        the settled format, so up to LINK_ATTEMPTS encoders are tried."""
         old, self.gst = self.gst, gst
         if old is not None:
             old.retired.set()
-        for link in links_from(pw_dump(), self.source_port):
-            # A link can vanish in between, when the consumer at its end exits on its own.
-            subprocess.run(["pw-link", "-d", str(link)], stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
-        self.relay.use(gst.read_fd)
-        gst.read_fd = None
-        run_tool(["pw-link", str(self.source_port), str(sink)], "pw-link")
+        for attempt in range(1, LINK_ATTEMPTS + 1):
+            sink = wait_for(
+                "PipeWire input from gst-launch-1.0",
+                lambda name=gst.node_name: input_port(pw_dump(), name),
+                gst,
+                GRAPH_TIMEOUT,
+            )
+            for link in links_from(pw_dump(), self.source_port):
+                # A link can vanish in between, when the consumer at its end exits on its own.
+                subprocess.run(["pw-link", "-d", str(link)], stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+            self.relay.use(gst.read_fd)
+            gst.read_fd = None
+            if self.link(gst, sink):
+                gst.quiet.clear()
+                break
+            if attempt == LINK_ATTEMPTS:
+                raise DisplayError(
+                    f"gst-launch-1.0 could not take KWin's stream in {LINK_ATTEMPTS} attempts:\n{gst.last_lines()}"
+                )
+            self.link_retries += 1
+            say(f"the encoder could not take KWin's stream (attempt {attempt} of {LINK_ATTEMPTS}); starting another")
+            gst.retired.set()
+            gst.stop(signal.SIGINT)
+            gst, self.spare = (self.spare or self.start_encoder()), None
+            self.gst = gst
         if old is not None:
             # Its pipe is closed and its link is gone; NVENC and CUDA teardown can take a while.
             threading.Thread(target=old.stop, args=(signal.SIGINT,), daemon=True).start()
+
+    def link(self, gst, sink):
+        """Link KWin's port to sink; True once the link is active, False if gst exits first."""
+        subprocess.run(
+            ["pw-link", str(self.source_port), str(sink)], stdin=subprocess.DEVNULL, capture_output=True, timeout=10
+        )
+        deadline = time.monotonic() + LINK_TIMEOUT
+        while gst.alive() and time.monotonic() < deadline:
+            if link_active(pw_dump(), self.source_port, sink):
+                return True
+            time.sleep(0.02)
+        return False
 
     def stop_encoders(self):
         self.relay.close()
@@ -933,11 +1233,12 @@ class Session:
 
     def restart_capture(self):
         started = time.monotonic()
-        self.switch_to(self.spare)
-        self.spare = None
+        spare, self.spare = self.spare, None
+        self.switch_to(spare)
         linked = time.monotonic()
         first = (time.monotonic() - linked) * 1000 if self.relay.first_frame.wait(2) else None
-        self.spare = self.start_encoder()
+        if self.spare is None:
+            self.spare = self.start_encoder()
         say(
             f"a window came onto {output_name(self.a.name)}: restarted the capture, "
             + (
@@ -988,7 +1289,7 @@ def main(argv=None):
         s.check_free()
         s.start_receiver()
         source = s.start_monitor()
-        s.start_stream(source)
+        s.start_stream(s.pointer_source(source))
         s.watch()
     except (KeyboardInterrupt, Stop):
         say("stopping")

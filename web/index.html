@@ -134,6 +134,7 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
   border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin: 8px 0 0; max-height: 220px; overflow: auto;
 }
 #displayRetry { margin-top: 8px; }
+#displayPointer { margin: 4px 0 0; color: var(--muted); }
 @media (max-width: 520px) { .row { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
 </style>
 </head>
@@ -161,9 +162,10 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
       <h2>Second display</h2>
       <div class="row"><span>Panel as monitor</span><label class="inline"><input type="checkbox" id="displayOn"> show a virtual monitor of the desktop on the panel</label></div>
       <p id="displayState" aria-live="polite"><span class="dot" id="displayDot"></span><span id="displayText">…</span></p>
+      <p id="displayPointer" hidden></p>
       <pre class="mono" id="displayErr" hidden></pre>
       <button id="displayRetry" type="button" hidden>Try again now</button>
-      <p class="note">Adds a 2240×1080 virtual monitor, Virtual-RYUO, to the desktop. Windows dragged past the right edge of your main monitor appear on the panel. While it runs, the panel's stats overlay and background video are hidden; brightness still works. The panel gets a new frame only when something on the virtual monitor changes. Turning it off removes the virtual monitor, which takes up to about 10 s. Needs KDE Plasma on Wayland, krfb and an NVIDIA GPU.</p>
+      <p class="note">Adds a 2240×1080 virtual monitor, Virtual-RYUO, to the desktop. Windows dragged past the right edge of your main monitor appear on the panel. While it runs, the panel's stats overlay and background video are hidden; brightness still works. The panel gets a new frame only when something on the virtual monitor changes. Turning it off removes the virtual monitor, which takes up to about 10 s. Needs KDE Plasma on Wayland, krfb and an NVIDIA GPU. To show the mouse pointer on the panel, the desktop asks once which screen to share: choose Virtual-RYUO and allow restoring, so later starts skip the question.</p>
     </section>
     <section>
       <h2>Stats in each slot</h2>
@@ -591,6 +593,11 @@ function renderDisplay(s) {
   if (s && !displaySending) $("displayOn").checked = s.on;
   $("displayDot").className = "dot" + (!s ? "" : failed ? " bad" : s.state === "on" ? " ok" : "");
   $("displayText").textContent = s ? displayText(s) : "Not available: this ryuod has no second-display support. Restart it.";
+  const p = s && (s.state === "on" || s.state === "starting") ? s.pointer : null;
+  $("displayPointer").hidden = !p;
+  $("displayPointer").textContent = !p ? "" : p.shown
+    ? "Mouse pointer: shown on the panel."
+    : `No mouse pointer on the panel: ${p.reason || "unknown reason"}. Turn the switch off and on to choose the screen again.`;
   $("displayErr").hidden = !failed || !s.error;
   $("displayErr").textContent = failed && s.error ? s.error : "";
   $("displayRetry").hidden = !failed;

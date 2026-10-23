@@ -910,6 +910,18 @@ DISPLAY_PERMANENT = ("missing programs:", "make receiver", "no cooler on adb")
 DISPLAY_STATS_RE = re.compile(r"sent ([0-9.]+) fps, ([0-9.]+) Mb/s")
 # The receiver's own 5 s frame-rate line; logged, like the one above, only with -v.
 DISPLAY_RECEIVER_FPS_RE = re.compile(r"ryuo-display: [0-9.]+ fps")
+# ryuo_display.py's "pointer: shown" or "pointer: not shown: <reason>" line.
+DISPLAY_POINTER = "pointer: "
+
+
+def display_pointer(line):
+    """{"shown": bool, "reason": str or None} from a "pointer: " line, else None."""
+    if not line.startswith(DISPLAY_POINTER):
+        return None
+    rest = line[len(DISPLAY_POINTER) :].strip()
+    if rest == "shown":
+        return {"shown": True, "reason": None}
+    return {"shown": False, "reason": rest.removeprefix("not shown: ") or None}
 
 
 class NotReady(Exception):
@@ -991,7 +1003,7 @@ class Display(threading.Thread):
         self.terminating = False  # SIGTERM sent to the current child
         self.resume_state = None  # the state set(False) replaced with "stopping"
         self.tail = collections.deque(maxlen=DISPLAY_TAIL)
-        self.st = {"state": "off", "fps": None, "mbps": None, "message": None, "error": None}
+        self.st = {"state": "off", "fps": None, "mbps": None, "message": None, "error": None, "pointer": None}
 
     # -- called from HTTP threads and main()
 
@@ -1004,7 +1016,7 @@ class Display(threading.Thread):
                     self.failures = 0
                 if self.proc is None:
                     # So the reply to the switch already says what happens next.
-                    self.st.update(state="starting", fps=None, mbps=None, message=None, error=None)
+                    self.st.update(state="starting", fps=None, mbps=None, message=None, error=None, pointer=None)
             elif self.proc is not None and self.st["state"] != "stopping":
                 self.resume_state = self.st["state"]
                 self.st.update(state="stopping")
@@ -1046,7 +1058,7 @@ class Display(threading.Thread):
             while not self.quit:
                 if not self.want:
                     self.retry_at = self.blocked = None
-                    self.st.update(state="off", fps=None, mbps=None, message=None, error=None)
+                    self.st.update(state="off", fps=None, mbps=None, message=None, error=None, pointer=None)
                     self.cond.wait()
                     continue
                 if self.blocked is not None:
@@ -1068,7 +1080,7 @@ class Display(threading.Thread):
         except NotReady as e:
             return self.failed(str(e), permanent=False)
         self.tail.clear()
-        self.update(state="starting", fps=None, mbps=None, message=None, error=None)
+        self.update(state="starting", fps=None, mbps=None, message=None, error=None, pointer=None)
         try:
             proc = subprocess.Popen(
                 self.cmd,
@@ -1131,6 +1143,8 @@ class Display(threading.Thread):
                 self.tail.append(line)
                 if m:
                     self.st.update(fps=float(m.group(1)), mbps=float(m.group(2)))
+                elif (pointer := display_pointer(line.strip())) is not None:
+                    self.st["pointer"] = pointer
                 elif line.strip() and not DISPLAY_RECEIVER_FPS_RE.fullmatch(line.strip()):
                     self.st["message"] = line
                 if line.startswith("streaming to the panel") and self.st["state"] == "starting":
@@ -1147,12 +1161,12 @@ class Display(threading.Thread):
                 self.failures = 0
             if permanent:
                 self.blocked, self.retry_at = (cooler,), None
-                self.st.update(state="error", error=error, fps=None, mbps=None, message=None)
+                self.st.update(state="error", error=error, fps=None, mbps=None, message=None, pointer=None)
             else:
                 delay = self.backoff[min(self.failures, len(self.backoff) - 1)]
                 self.failures += 1
                 self.retry_at = time.monotonic() + delay
-                self.st.update(state="retrying", error=error, fps=None, mbps=None, message=None)
+                self.st.update(state="retrying", error=error, fps=None, mbps=None, message=None, pointer=None)
         then = "not retried until the switch is turned on again or the cooler reconnects" if permanent else None
         log(f"display: {error}; {then or f'retrying in {delay} s'}")
 

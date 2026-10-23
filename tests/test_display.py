@@ -21,6 +21,7 @@ import ryuo_display as D
 def test_defaults():
     a = D.parse_args([])
     assert (a.bitrate, a.scale, a.name, a.port, a.serial, a.verbose) == (10, None, "RYUO", 27183, None, False)
+    assert (a.no_pointer, a.dialog_timeout) == (False, D.DIALOG_TIMEOUT)
 
 
 @pytest.mark.parametrize(
@@ -37,6 +38,7 @@ def test_defaults():
         ["--name", "x" * 33],
         ["--port", "80"],
         ["--port", "70000"],
+        ["--dialog-timeout", "0"],
     ],
 )
 def test_bad_arguments_exit_2(argv, capsys):
@@ -405,6 +407,61 @@ def test_no_restart_for_a_window_that_left_again():
     assert timer.due()  # the menu stayed
 
 
+# ---------------------------------------------------------------- pointer: desktop portal capture
+
+
+def test_token_path_follows_xdg_config_home():
+    assert D.token_path({"XDG_CONFIG_HOME": "/c", "HOME": "/h"}) == "/c/ryuo/display-portal-token"
+    assert D.token_path({"HOME": "/h"}) == "/h/.config/ryuo/display-portal-token"
+
+
+def test_token_is_private_and_none_removes_it(tmp_path):
+    path = str(tmp_path / "ryuo" / "display-portal-token")
+    assert D.read_token(path) is None
+    D.write_token(path, "abc-123")
+    assert D.read_token(path) == "abc-123"
+    assert os.stat(path).st_mode & 0o777 == 0o600
+    D.write_token(path, "def-456")  # tokens are single-use: each start stores the new one
+    assert D.read_token(path) == "def-456"
+    D.write_token(path, None)
+    assert not os.path.exists(path)
+    D.write_token(path, None)  # already gone
+
+
+def test_select_sources_asks_for_one_monitor_with_the_pointer_drawn_in():
+    opts = D.select_sources_options(None)
+    assert opts == {
+        "types": ("u", 1),
+        "multiple": ("b", False),
+        "cursor_mode": ("u", 2),
+        "persist_mode": ("u", 2),
+    }
+    assert D.select_sources_options("tok")["restore_token"] == ("s", "tok")
+
+
+def test_stream_node_takes_the_one_stream():
+    assert D.stream_node({"streams": [(97, {"source_type": 1})]}) == 97
+    for results in ({}, {"streams": []}, {"streams": [(1, {}), (2, {})]}):
+        with pytest.raises(D.PortalError):
+            D.stream_node(results)
+
+
+def test_cancel_and_failure_reasons():
+    assert D.RESPONSE_REASONS[1] == "screen selection was cancelled"
+    assert "could not start" in D.RESPONSE_REASONS[2]
+
+
+def test_node_output_port_and_link_state():
+    graph = [*GRAPH, link(130, 92, 111, 401, 402)]
+    graph[-1]["info"]["state"] = "negotiating"
+    assert D.node_output_port(graph, 92) == ("kwin-screencast-Virtual-RYUO", 111)
+    assert D.node_output_port(graph, 999) is None
+    assert D.node_output_port([o for o in graph if o["id"] != 111], 92) is None
+    assert D.link_active(graph, 111, 110)  # krfb's link
+    assert not D.link_active(graph, 111, 402)  # still negotiating
+    assert not D.link_active(graph, 201, 110)
+
+
 # ---------------------------------------------------------------- main
 
 
@@ -445,8 +502,14 @@ def fake_session(monkeypatch):
             self.stack.callback(events.append, "monitor removed")
             return 111, 123
 
-        def start_stream(self, source):
+        def pointer_source(self, source):
             assert source == (111, 123)
+            events.append("portal capture up")
+            self.stack.callback(events.append, "portal session closed")
+            return 222, None
+
+        def start_stream(self, source):
+            assert source == (222, None)
             self.stack.callback(events.append, "encoder stopped")
 
         def watch(self):
@@ -465,7 +528,9 @@ def test_main_tears_down_in_reverse_order(fake_session, outcome, status, capsys)
         "output free",
         "receiver up",
         "monitor up",
+        "portal capture up",
         "encoder stopped",
+        "portal session closed",
         "monitor removed",
         "forward removed",
         "receiver stopped",

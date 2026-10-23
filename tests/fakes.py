@@ -273,6 +273,10 @@ FAKE_DISPLAY = textwrap.dedent(
         print("  qt.qpa.wayland: could not connect to display", flush=True)
         sys.exit(1)
     print("virtual monitor Virtual-RYUO is up, 2240x1080 at 60 Hz", flush=True)
+    if "nopointer" in mode:
+        print("pointer: not shown: screen selection was cancelled", flush=True)
+    else:
+        print("pointer: shown", flush=True)
     time.sleep(0.3)
     print("streaming to the panel at 10 Mb/s; stop with Ctrl-C", flush=True)
     n = 0
