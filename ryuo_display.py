@@ -41,9 +41,9 @@ import collections
 import contextlib
 import json
 import os
-import queue
 import re
 import secrets
+import select
 import shutil
 import signal
 import socket
@@ -202,13 +202,22 @@ def gst_cmd(node_name, fd, bitrate_mbps):
     nvh265enc: P1 (fastest preset) with the ultra-low-latency tune and zerolatency, no B-frames,
     constant bitrate, one keyframe at the start and none after (gop-size -1: each connection gets
     its own encoder, so the decoder starts on that keyframe, and TCP loses no frame that a later
-    keyframe would have to repair), and an access unit delimiter (NAL type 35) before every frame."""
+    keyframe would have to repair), and an access unit delimiter (NAL type 35) before every frame.
+
+    identity drops buffers flagged corrupted. KWin sends one each time the pointer moves on the
+    output: in krfb's cursor-as-metadata mode it renders nothing for a pointer move, flags the
+    chunk SPA_CHUNK_FLAG_CORRUPTED, and leaves whatever an earlier frame put in that buffer (KWin
+    cycles 3 buffers). pipewiresrc passes such a buffer on with GST_BUFFER_FLAG_CORRUPTED; encoded,
+    it shows that earlier frame again, which made the panel flicker while the pointer moved."""
     return [
         "gst-launch-1.0",
         "-q",
         "pipewiresrc",
         "autoconnect=false",
         f"client-name={node_name}",
+        "!",
+        "identity",
+        "drop-buffer-flags=corrupted",
         "!",
         "glupload",
         "!",
@@ -392,28 +401,79 @@ class Rate:
         return fps, mbps
 
 
-def relay(fds, sock, stats, on_error):
-    """Send encoded frames to the receiver, reading each encoder's pipe in turn.
+class Relay:
+    """Sends encoded frames from the current encoder's pipe to the receiver, on its own thread.
 
-    fds is a queue of pipe read ends, one per encoder process. When an encoder is replaced (see
-    Session.restart_capture()) its pipe reaches end of file and reading continues with the next
-    one; the new encoder starts with its own parameter sets and keyframe, which the panel's decoder
-    takes mid-stream. None in the queue ends the relay."""
-    try:
-        sock.sendall(AUD)
-        while (fd := fds.get()) is not None:
-            reader = GdpReader()
-            try:
-                while chunk := os.read(fd, 1 << 20):
-                    for kind, payload in reader.feed(chunk):
-                        if kind == GDP_BUFFER:
-                            data = panel_frame(payload)
-                            sock.sendall(data)
-                            stats.add(len(data))
-            finally:
-                os.close(fd)
-    except (OSError, ValueError) as e:
-        on_error(f"stream to the panel failed: {e}")
+    use(fd) makes fd the current pipe at once and closes the previous one unread. Frames the old
+    encoder still had in flight are dropped instead of delaying the new encoder's first frame, and
+    the old encoder, which can take a second to shut down, gets EPIPE on its next write. The new
+    encoder starts with its own parameter sets and keyframe, which the panel's decoder takes
+    mid-stream. first_frame is set when the first frame read from the current pipe has been sent."""
+
+    def __init__(self, sock, stats, on_error):
+        self.sock, self.stats, self.on_error = sock, stats, on_error
+        self.lock = threading.Lock()
+        self.fd = None
+        self.closed = False
+        self.first_frame = threading.Event()
+        self.wake_r, self.wake_w = os.pipe()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    def use(self, fd):
+        with self.lock:
+            self.fd = fd
+            self.first_frame.clear()
+        os.write(self.wake_w, b"x")
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+        os.write(self.wake_w, b"x")
+        self.thread.join(5)
+        for fd in (self.wake_r, self.wake_w):
+            os.close(fd)
+
+    def _run(self):
+        current, reader = None, GdpReader()
+        try:
+            self.sock.sendall(AUD)
+            while True:
+                with self.lock:
+                    fd, closed = self.fd, self.closed
+                if closed:
+                    return
+                if fd != current:
+                    if current is not None:
+                        os.close(current)
+                    current, reader = fd, GdpReader()
+                ready = select.select([self.wake_r] + ([current] if current is not None else []), [], [])[0]
+                if self.wake_r in ready:
+                    os.read(self.wake_r, 64)
+                    continue
+                chunk = os.read(current, 1 << 20)
+                if not chunk:
+                    # The encoder exited; Session.watch() reports that.
+                    with self.lock:
+                        if self.fd == current:
+                            self.fd = None
+                    os.close(current)
+                    current = None
+                    continue
+                for kind, payload in reader.feed(chunk):
+                    if kind == GDP_BUFFER:
+                        data = panel_frame(payload)
+                        self.sock.sendall(data)
+                        self.stats.add(len(data))
+                        self.first_frame.set()
+        except (OSError, ValueError) as e:
+            self.on_error(f"stream to the panel failed: {e}")
+        finally:
+            if current is not None:
+                with contextlib.suppress(OSError):
+                    os.close(current)
 
 
 # ---------------------------------------------------------------- windows arriving on the output
@@ -430,21 +490,22 @@ def relay(fds, sock, stats, on_error):
 DBUS_IFACE = "org.rogryuolcd.Display"
 DBUS_PATH = "/org/rogryuolcd/Display"
 DBUS_XML = f"""<node><interface name="{DBUS_IFACE}">
-<method name="WindowEvent"><arg type="s" name="kind" direction="in"/></method>
+<method name="WindowEvent"><arg type="s" name="kind" direction="in"/><arg type="s" name="window" direction="in"/></method>
 </interface></node>"""
-RESTART_QUIET = 0.5  # s without window events after an arrival before the stream is restarted
+RESTART_QUIET = 0.3  # s without window events after an arrival before the stream is restarted
 MOVE_REPORT_WINDOW = 3000  # ms after an arrival during which the script also reports moves
 
 
 def kwin_script(output, service):
-    """KWin script that calls WindowEvent("enter") on service when a window starts to overlap
-    output, and WindowEvent("move") while windows on output keep moving shortly after an arrival
-    (so the restart waits until a drag has settled)."""
+    """KWin script that calls WindowEvent(kind, window id) on service: "enter" when a window starts
+    to overlap output, "leave" when it stops overlapping or closes, and "move" while windows on
+    output keep moving shortly after an arrival (so the restart waits until a drag has settled)."""
     return f"""// Loaded by ryuo_display.py; unloaded when it exits.
 const OUTPUT = {json.dumps(output)};
 let lastEnter = 0;
-function send(kind) {{
-    callDBus({json.dumps(service)}, {json.dumps(DBUS_PATH)}, {json.dumps(DBUS_IFACE)}, "WindowEvent", kind);
+function send(kind, w) {{
+    callDBus({json.dumps(service)}, {json.dumps(DBUS_PATH)}, {json.dumps(DBUS_IFACE)}, "WindowEvent", kind,
+             String(w.internalId));
 }}
 function onOutput(w) {{
     const s = workspace.screens.find(o => o.name === OUTPUT);
@@ -452,18 +513,26 @@ function onOutput(w) {{
     const a = s.geometry, g = w.frameGeometry;
     return g.x < a.x + a.width && a.x < g.x + g.width && g.y < a.y + a.height && a.y < g.y + g.height;
 }}
+const on = new Map();  // window id -> overlaps OUTPUT
 function track(w, isNew) {{
-    let was = onOutput(w);
-    if (isNew && was) {{ lastEnter = Date.now(); send("enter"); }}
+    const id = String(w.internalId);
+    on.set(id, onOutput(w));
+    if (isNew && on.get(id)) {{ lastEnter = Date.now(); send("enter", w); }}
     w.frameGeometryChanged.connect(function () {{
-        const now = onOutput(w);
-        if (now && !was) {{ lastEnter = Date.now(); send("enter"); }}
-        else if (now && Date.now() - lastEnter < {MOVE_REPORT_WINDOW}) send("move");
-        was = now;
+        const was = on.get(id), now = onOutput(w);
+        if (now && !was) {{ lastEnter = Date.now(); send("enter", w); }}
+        else if (!now && was) send("leave", w);
+        else if (now && Date.now() - lastEnter < {MOVE_REPORT_WINDOW}) send("move", w);
+        on.set(id, now);
     }});
 }}
 workspace.windowList().forEach(w => track(w, false));
 workspace.windowAdded.connect(w => track(w, true));
+workspace.windowRemoved.connect(function (w) {{
+    const id = String(w.internalId);
+    if (on.get(id)) send("leave", w);
+    on.delete(id);
+}});
 """
 
 
@@ -512,7 +581,7 @@ class WindowWatch:
             raise DisplayError(f"D-Bus {iface}.{method}: {e.message}") from e
 
     def _call(self, conn, sender, path, iface, method, params, invocation):
-        self.on_event(params.unpack()[0])
+        self.on_event(*params.unpack())
         invocation.return_value(None)
 
     def close(self):
@@ -538,26 +607,29 @@ class WindowWatch:
 
 
 class RestartTimer:
-    """Decides when to restart the stream: RESTART_QUIET s after the last window event, once a
-    window has arrived since the previous restart. Thread-safe; now() is injectable for tests."""
+    """Decides when to restart the stream: RESTART_QUIET s after the last window event, when a
+    window that arrived since the previous restart is still on the output. A tooltip or menu that
+    closes again within that time causes no restart. Thread-safe; now() is injectable for tests."""
 
     def __init__(self, now=time.monotonic):
         self.now = now
         self.lock = threading.Lock()
-        self.pending = False
+        self.arrived = set()
         self.last = 0.0
 
-    def event(self, kind):
+    def event(self, kind, window=""):
         with self.lock:
             self.last = self.now()
             if kind == "enter":
-                self.pending = True
+                self.arrived.add(window)
+            elif kind == "leave":
+                self.arrived.discard(window)
 
     def due(self):
-        """True once per arrival, when the restart should happen now."""
+        """True when the restart should happen now; the arrivals it covers are then forgotten."""
         with self.lock:
-            if self.pending and self.now() - self.last >= RESTART_QUIET:
-                self.pending = False
+            if self.arrived and self.now() - self.last >= RESTART_QUIET:
+                self.arrived.clear()
                 return True
             return False
 
@@ -568,7 +640,8 @@ _print_lock = threading.Lock()
 
 
 def say(text):
-    with _print_lock:
+    """Print a line. A closed stdout (the reader went away) must not stop the run or its teardown."""
+    with _print_lock, contextlib.suppress(OSError, ValueError):
         print(text, flush=True)
 
 
@@ -779,11 +852,11 @@ class Session:
         sock.settimeout(SEND_TIMEOUT)
 
         self.source_port = source[0]
-        self.fds = queue.Queue()
+        self.relay = Relay(sock, self.stats, self.fail)
         self.generation = 0
         self.gst = self.spare = None
         self.stack.callback(self.stop_encoders)
-        threading.Thread(target=relay, args=(self.fds, sock, self.stats, self.fail), daemon=True).start()
+        self.relay.start()
         self.switch_to(self.start_encoder())
         # A restart has to wait for the replacement encoder to start (about 1.5 s for GStreamer's
         # OpenGL and CUDA setup), so one is kept ready, idle and unlinked.
@@ -802,8 +875,8 @@ class Session:
             self.stack.callback(watch.close)
 
     def start_encoder(self):
-        """Start a gst-launch-1.0 encoder whose PipeWire input is not linked yet. Its pipe goes into
-        the relay's queue now, so the relay reads it after the encoders started before it."""
+        """Start a gst-launch-1.0 encoder whose PipeWire input is not linked yet. Its pipe's read
+        end is kept on it (read_fd) until switch_to() hands it to the relay."""
         self.generation += 1
         node_name = f"ryuo-display-{os.getpid()}-{self.generation}"
         read_fd, write_fd = os.pipe()
@@ -820,8 +893,7 @@ class Session:
             raise
         finally:
             os.close(write_fd)
-        gst.node_name, gst.retired = node_name, retired
-        self.fds.put(read_fd)
+        gst.node_name, gst.retired, gst.read_fd = node_name, retired, read_fd
         return gst
 
     def switch_to(self, gst):
@@ -841,29 +913,38 @@ class Session:
         if old is not None:
             old.retired.set()
         for link in links_from(pw_dump(), self.source_port):
-            run_tool(["pw-link", "-d", str(link)], "pw-link -d")
+            # A link can vanish in between, when the consumer at its end exits on its own.
+            subprocess.run(["pw-link", "-d", str(link)], stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+        self.relay.use(gst.read_fd)
+        gst.read_fd = None
         run_tool(["pw-link", str(self.source_port), str(sink)], "pw-link")
         if old is not None:
-            old.stop(signal.SIGINT)
+            # Its pipe is closed and its link is gone; NVENC and CUDA teardown can take a while.
+            threading.Thread(target=old.stop, args=(signal.SIGINT,), daemon=True).start()
 
     def stop_encoders(self):
+        self.relay.close()
         for gst in (self.gst, self.spare):
             if gst is not None:
                 gst.retired.set()
                 gst.stop(signal.SIGINT)
-        self.fds.put(None)
+                if gst.read_fd is not None:
+                    os.close(gst.read_fd)
 
     def restart_capture(self):
+        started = time.monotonic()
         self.switch_to(self.spare)
         self.spare = None
-        linked, frames = time.monotonic(), self.stats.frames
-        while self.stats.frames == frames and time.monotonic() - linked < 1:
-            time.sleep(0.005)
-        first = (time.monotonic() - linked) * 1000 if self.stats.frames != frames else None
+        linked = time.monotonic()
+        first = (time.monotonic() - linked) * 1000 if self.relay.first_frame.wait(2) else None
         self.spare = self.start_encoder()
         say(
             f"a window came onto {output_name(self.a.name)}: restarted the capture, "
-            + (f"first new frame sent {first:.0f} ms after relinking" if first is not None else "no frame within 1 s")
+            + (
+                f"relinked after {(linked - started) * 1000:.0f} ms, first new frame sent {first:.0f} ms later"
+                if first is not None
+                else "no frame within 2 s of relinking"
+            )
         )
 
     def watch(self):

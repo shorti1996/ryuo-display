@@ -5,12 +5,10 @@ krfb-virtualmonitor, PipeWire tools or GStreamer.
 
 import contextlib
 import os
-import queue
 import re
 import signal
 import socket
 import struct
-import threading
 import types
 
 import pytest
@@ -309,41 +307,50 @@ def test_rate_reports_fps_and_mbps():
     assert rate.sample() == (0.0, 0.0)
 
 
-def test_relay_sends_frames_with_delimiter_ahead_and_moves_on_to_the_next_encoder():
+def received(sock):
+    with contextlib.closing(sock):
+        return b"".join(iter(lambda: sock.recv(65536), b""))
+
+
+def test_relay_sends_frames_with_delimiter_ahead_and_switches_encoders_at_once():
     first_r, first_w = os.pipe()
     second_r, second_w = os.pipe()
-    fds = queue.Queue()
-    fds.put(first_r)
-    fds.put(second_r)
     a, b = socket.socketpair()
     stats = D.Stats()
     errors = []
-    t = threading.Thread(target=D.relay, args=(fds, a, stats, errors.append))
-    t.start()
-    # The replacement encoder's caps packet arrives before the old encoder has finished.
-    os.write(second_w, gdp(2, b"caps") + gdp(D.GDP_BUFFER, AU2))
-    os.close(second_w)
+    relay = D.Relay(a, stats, errors.append)
+    relay.start()
+    relay.use(first_r)
     os.write(first_w, gdp(2, b"caps") + gdp(D.GDP_BUFFER, AU1))
+    assert relay.first_frame.wait(5)
+    # The old encoder has not exited and its pipe is still open: the relay must not wait for it.
+    relay.use(second_r)
+    assert not relay.first_frame.is_set()
+    os.write(second_w, gdp(2, b"caps") + gdp(D.GDP_BUFFER, AU2))
+    assert relay.first_frame.wait(5)
+    with pytest.raises(BrokenPipeError):  # the old pipe was closed by the switch
+        for _ in range(100):
+            os.write(first_w, gdp(D.GDP_BUFFER, AU1))
     os.close(first_w)
-    fds.put(None)
-    t.join(5)
+    os.close(second_w)
+    relay.close()
     a.close()
-    with contextlib.closing(b):
-        got = b"".join(iter(lambda: b.recv(65536), b""))
-    assert got == D.AUD + AU1[7:] + D.AUD + AU2[7:] + D.AUD
+    assert received(b) == D.AUD + AU1[7:] + D.AUD + AU2[7:] + D.AUD
     assert (stats.frames, errors) == (2, [])
 
 
 def test_relay_reports_a_closed_connection():
     read_fd, write_fd = os.pipe()
-    fds = queue.Queue()
-    fds.put(read_fd)
     a, b = socket.socketpair()
     b.close()
     errors = []
+    relay = D.Relay(a, D.Stats(), errors.append)
+    relay.start()
+    relay.use(read_fd)
     os.write(write_fd, gdp(D.GDP_BUFFER, AU1))
+    relay.thread.join(5)
     os.close(write_fd)
-    D.relay(fds, a, D.Stats(), errors.append)
+    relay.close()
     a.close()
     assert len(errors) == 1 and errors[0].startswith("stream to the panel failed")
 
@@ -363,23 +370,39 @@ def test_kwin_script_calls_back_this_process_for_the_output():
     call = 'callDBus("org.rogryuolcd.Display.pid42", "/org/rogryuolcd/Display", "org.rogryuolcd.Display", "WindowEvent"'
     assert call in js
     assert "workspace.windowAdded.connect" in js and "frameGeometryChanged.connect" in js
-    assert 'send("enter")' in js and 'send("move")' in js
+    assert "workspace.windowRemoved.connect" in js
+    assert 'send("enter", w)' in js and 'send("leave", w)' in js and 'send("move", w)' in js
 
 
 def test_restart_waits_for_quiet_after_an_arrival():
     clock = [0.0]
     timer = D.RestartTimer(now=lambda: clock[0])
-    timer.event("move")
+    timer.event("move", "a")
     clock[0] = 5
     assert not timer.due()  # moves alone never restart
-    timer.event("enter")
-    clock[0] += 0.3
-    timer.event("move")  # still being dragged
+    timer.event("enter", "a")
+    clock[0] += 0.2
+    timer.event("move", "a")  # still being dragged
     clock[0] += D.RESTART_QUIET - 0.1
     assert not timer.due()
     clock[0] += 0.2
     assert timer.due()
     assert not timer.due()  # once per arrival
+
+
+def test_no_restart_for_a_window_that_left_again():
+    clock = [0.0]
+    timer = D.RestartTimer(now=lambda: clock[0])
+    timer.event("enter", "tooltip")
+    clock[0] += 0.1
+    timer.event("leave", "tooltip")
+    clock[0] += 5
+    assert not timer.due()
+    timer.event("enter", "menu")
+    timer.event("enter", "tooltip")
+    timer.event("leave", "tooltip")
+    clock[0] += 5
+    assert timer.due()  # the menu stayed
 
 
 # ---------------------------------------------------------------- main
