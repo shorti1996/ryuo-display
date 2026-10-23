@@ -7,3 +7,8 @@ re/ext/
 # Panel screenshots show whatever media was playing
 re/*.png
 __pycache__/
+.venv/
+.pytest_cache/
+.ruff_cache/
+web/node_modules/
+.idea/

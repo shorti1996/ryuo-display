@@ -1,0 +1,23 @@
+[project]
+name = "rog-ryuo-lcd"
+version = "0.1.0"
+description = "Linux driver, stats daemon and tray for the ASUS ROG RYUO IV pump LCD"
+requires-python = ">=3.12"
+# Runtime is the standard library only; the tray also needs PySide6 (python3-pyside6 on Fedora).
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.12",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 125
+extend-exclude = ["re", "web"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
