@@ -1,6 +1,7 @@
 /**
  * Background media: the preset and custom groups from GET /api/media, the checked set from
- * config.media, Refresh, and Play (POST /api/media/select).
+ * config.media, Refresh, Play (POST /api/media/select), Delete (POST /api/media/delete), and the
+ * thumbnails and preview of Custom files.
  */
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +10,11 @@ import { $, CUSTOM, PRESET, makeDaemon, openPage, tick } from "./harness.js";
 const boxes = () => [...$("media").querySelectorAll("input[type=checkbox]")];
 const box = (name) => boxes().find((b) => b.value === name);
 const checked = () => boxes().filter((b) => b.checked).map((b) => b.value);
+const row = (name) => box(name).closest(".mrow");
+const delButton = (name) => row(name).querySelector("button.del");
+const thumb = (name) => row(name).querySelector("button.thumb");
+const thumbUrl = (name) => `/api/media/thumb?name=${encodeURIComponent(name)}`;
+const previewUrl = (name) => `/api/media/preview?name=${encodeURIComponent(name)}`;
 
 describe("media list", () => {
   it("shows the preset group, then the custom group, in the daemon's order", async () => {
@@ -20,8 +26,11 @@ describe("media list", () => {
     // Each name sits in the group under its own heading.
     const kids = [...$("media").children];
     const customHeading = kids.findIndex((k) => k.textContent === "Custom (/sdcard/pcMedia)");
-    expect(kids.slice(1, customHeading).map((k) => k.textContent)).toEqual(PRESET);
-    expect(kids.slice(customHeading + 1).map((k) => k.textContent)).toEqual(CUSTOM);
+    const names = (rows) => rows.map((k) => k.querySelector(".mono").textContent);
+    expect(names(kids.slice(1, customHeading))).toEqual(PRESET);
+    // The Custom group opens with the preview hint, then one row per file.
+    expect(kids[customHeading + 1].textContent).toBe("Click a thumbnail to preview the file below this list.");
+    expect(names(kids.slice(customHeading + 2))).toEqual(CUSTOM);
   });
 
   it("checks the files in config.media", async () => {
@@ -124,5 +133,195 @@ describe("Play", () => {
     $("refresh").click();
     await tick(0);
     expect(checked()).toEqual(["RYUO_IV_HW_Info_01.mp4"]);
+  });
+});
+
+describe("Custom rows", () => {
+  it("give each Custom file a thumbnail, its size and a Delete button; presets get none", async () => {
+    await openPage();
+    for (const name of CUSTOM) {
+      expect(thumb(name).querySelector("img").getAttribute("src")).toBe(thumbUrl(name));
+      expect(delButton(name).textContent).toBe("Delete");
+    }
+    expect(row(CUSTOM[0]).querySelector(".size").textContent).toBe("98 MB");
+    expect(row(CUSTOM[1]).querySelector(".size").textContent).toBe("735 kB");
+    for (const name of PRESET) expect(box(name).closest(".mrow")).toBeNull();
+    expect($("media").querySelectorAll("button.del")).toHaveLength(CUSTOM.length);
+    expect($("media").querySelectorAll("img")).toHaveLength(CUSTOM.length);
+  });
+
+  it("leave the size empty when the daemon has none", async () => {
+    await openPage(makeDaemon({ media: { sizes: {} } }));
+    expect(row(CUSTOM[0]).querySelector(".size").textContent).toBe("");
+  });
+
+  it("say a click previews the file", async () => {
+    await openPage();
+    expect(thumb(CUSTOM[0]).title).toBe("Click to preview");
+    expect(thumb(CUSTOM[0]).getAttribute("aria-label")).toBe(`Preview ${CUSTOM[0]}`);
+  });
+
+  it("drop a thumbnail that cannot be made, keeping the preview button", async () => {
+    await openPage();
+    thumb(CUSTOM[0]).querySelector("img").dispatchEvent(new Event("error"));
+    expect(thumb(CUSTOM[0]).querySelector("img")).toBeNull();
+    thumb(CUSTOM[0]).click();
+    expect($("mpVideo").getAttribute("src")).toBe(previewUrl(CUSTOM[0]));
+  });
+});
+
+describe("Delete", () => {
+  it("asks again before deleting, then posts the name and redraws the list", async () => {
+    const d = await openPage();
+    delButton(CUSTOM[1]).click();
+    expect(delButton(CUSTOM[1]).textContent).toBe("Really delete?");
+    expect(delButton(CUSTOM[1]).classList.contains("armed")).toBe(true);
+    expect(d.posts("/api/media/delete")).toEqual([]);
+    delButton(CUSTOM[1]).click();
+    await tick(0);
+    expect(d.posts("/api/media/delete")).toEqual([{ names: [CUSTOM[1]] }]);
+    expect(boxes().map((b) => b.value)).toEqual([...PRESET, CUSTOM[0]]);
+    expect($("result").textContent).toBe(`Deleted ${CUSTOM[1]}`);
+    expect($("result").style.color).toBe("var(--muted)");
+  });
+
+  it("drops the second step after 4 s, so a later click only asks again", async () => {
+    const d = await openPage();
+    delButton(CUSTOM[0]).click();
+    await tick(3999);
+    expect(delButton(CUSTOM[0]).textContent).toBe("Really delete?");
+    await tick(1);
+    expect(delButton(CUSTOM[0]).textContent).toBe("Delete");
+    expect(delButton(CUSTOM[0]).classList.contains("armed")).toBe(false);
+    delButton(CUSTOM[0]).click();
+    await tick(0);
+    expect(delButton(CUSTOM[0]).textContent).toBe("Really delete?");
+    expect(d.posts("/api/media/delete")).toEqual([]);
+  });
+
+  it("disarms one row when another row's Delete is clicked", async () => {
+    const d = await openPage();
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[1]).click();
+    expect(delButton(CUSTOM[0]).textContent).toBe("Delete");
+    expect(delButton(CUSTOM[1]).textContent).toBe("Really delete?");
+    delButton(CUSTOM[1]).click();
+    await tick(0);
+    expect(d.posts("/api/media/delete")).toEqual([{ names: [CUSTOM[1]] }]);
+    expect(box(CUSTOM[0])).toBeDefined();
+  });
+
+  it("shows the playlist the daemon fell back to after deleting the file that plays", async () => {
+    await openPage(makeDaemon({ config: { media: [CUSTOM[0]] } }));
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[0]).click();
+    await tick(0);
+    expect(checked()).toEqual(["RYUO_IV_HW_Info_01.mp4"]);
+    expect($("result").textContent).toBe(`Deleted ${CUSTOM[0]}; playlist now RYUO_IV_HW_Info_01.mp4`);
+  });
+
+  it("says the new playlist waits for the cooler when it is not connected", async () => {
+    await openPage(makeDaemon({ config: { media: [CUSTOM[0]] }, device: { connected: false } }));
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[0]).click();
+    await tick(0);
+    expect($("result").textContent).toBe(
+      `Deleted ${CUSTOM[0]}; playlist now RYUO_IV_HW_Info_01.mp4, sent when the cooler reconnects`,
+    );
+  });
+
+  it("shows the daemon's refusal and keeps the row", async () => {
+    const d = await openPage();
+    d.replyOnce("POST /api/media/delete", { status: 503, body: { ok: false, error: "the cooler did not take mediaDelete over HID, and adb: no devices" } });
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[0]).click();
+    expect(delButton(CUSTOM[0]).disabled).toBe(true);
+    await tick(0);
+    expect($("result").textContent).toBe("Delete: the cooler did not take mediaDelete over HID, and adb: no devices");
+    expect($("result").style.color).toBe("var(--bad)");
+    expect(delButton(CUSTOM[0]).disabled).toBe(false);
+    expect(delButton(CUSTOM[0]).textContent).toBe("Delete");
+  });
+
+  it("reports a file the cooler still lists", async () => {
+    const d = await openPage();
+    d.replyOnce("POST /api/media/delete", {
+      status: 200,
+      body: {
+        ok: true, deleted: [], remaining: [CUSTOM[0]], listedBy: "conn", sent: ["POST mediaDelete"], applied: true,
+        acked: true, restartsVideo: false, config: d.config, media: d.mediaLists,
+      },
+    });
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[0]).click();
+    await tick(0);
+    expect($("result").textContent).toBe(`Delete: ${CUSTOM[0]} is still on the cooler`);
+    expect($("result").style.color).toBe("var(--bad)");
+    expect(box(CUSTOM[0])).toBeDefined();
+  });
+});
+
+describe("Preview", () => {
+  it("plays a Custom file in a muted, looping video when its thumbnail is clicked", async () => {
+    await openPage();
+    expect($("mediaPreview").hidden).toBe(true);
+    thumb(CUSTOM[0]).click();
+    const v = $("mpVideo");
+    expect($("mediaPreview").hidden).toBe(false);
+    expect($("mpName").textContent).toBe(CUSTOM[0]);
+    expect(v.getAttribute("src")).toBe(previewUrl(CUSTOM[0]));
+    expect(v.hasAttribute("muted") && v.hasAttribute("loop")).toBe(true);
+    expect(v.hidden).toBe(false);
+    expect($("mpImage").hidden).toBe(true);
+    expect($("mpStatus").textContent).toMatch(/^Preparing the preview/);
+    v.dispatchEvent(new Event("loadeddata"));
+    expect($("mpStatus").textContent).toBe("");
+  });
+
+  it("shows a PNG in an image instead of the video", async () => {
+    await openPage();
+    thumb(CUSTOM[1]).click();
+    expect($("mpImage").getAttribute("src")).toBe(previewUrl(CUSTOM[1]));
+    expect($("mpImage").hidden).toBe(false);
+    expect($("mpVideo").hidden).toBe(true);
+    expect($("mpVideo").hasAttribute("src")).toBe(false);
+  });
+
+  it("Close hides the preview and drops the video source", async () => {
+    await openPage();
+    thumb(CUSTOM[0]).click();
+    $("mpClose").click();
+    expect($("mediaPreview").hidden).toBe(true);
+    expect($("mpVideo").hasAttribute("src")).toBe(false);
+  });
+
+  it("shows the daemon's reason when the preview fails, asking for one byte", async () => {
+    const d = await openPage();
+    d.replyOnce("GET /api/media/preview", { status: 502, body: { ok: false, error: "adb pull exited with 1: adb: no devices/emulators found" } });
+    thumb(CUSTOM[0]).click();
+    $("mpVideo").dispatchEvent(new Event("error"));
+    await tick(0);
+    expect($("mpStatus").textContent).toBe("Preview failed: adb pull exited with 1: adb: no devices/emulators found");
+    const [url, opt] = d.fetch.mock.calls.find(([u]) => String(u).startsWith("/api/media/preview"));
+    expect(url).toBe(previewUrl(CUSTOM[0]));
+    expect(opt.headers).toEqual({ Range: "bytes=0-0" });
+  });
+
+  it("blames the browser when the daemon served the file but it would not play", async () => {
+    await openPage();
+    thumb(CUSTOM[0]).click();
+    $("mpVideo").dispatchEvent(new Event("error"));
+    await tick(0);
+    expect($("mpStatus").textContent).toBe("Preview failed: this browser cannot play the file");
+  });
+
+  it("closes when the previewed file is deleted", async () => {
+    await openPage();
+    thumb(CUSTOM[0]).click();
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[0]).click();
+    await tick(0);
+    expect($("mediaPreview").hidden).toBe(true);
+    expect($("mpVideo").hasAttribute("src")).toBe(false);
   });
 });

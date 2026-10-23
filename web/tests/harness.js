@@ -103,7 +103,10 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media } = {})
       ...clone(stats),
     },
     sampledAt: Date.UTC(2026, 9, 22, 12, 5, 8),
-    mediaLists: { source: "conn", fetchedAt: 1792771200000, preset: [...PRESET], custom: [...CUSTOM], ...clone(media) },
+    mediaLists: {
+      source: "conn", fetchedAt: 1792771200000, preset: [...PRESET], custom: [...CUSTOM],
+      sizes: { [CUSTOM[0]]: 98123456, [CUSTOM[1]]: 734512 }, ...clone(media),
+    },
     down: false,
     closed: false,
     calls: [],
@@ -185,6 +188,33 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media } = {})
       Object.assign(d.config, { media: [...media], playMode: mode });
       return reply(200, { ok: true, ...applied(), sent: ["POST waterBlockScreenId"], restartsVideo: true, config: clone(d.config) });
     },
+    "POST /api/media/delete": (body) => {
+      const { names } = body;
+      if (!Array.isArray(names) || names.length < 1 || names.length > 100 || !names.every((n) => typeof n === "string")) {
+        throw new Invalid("names must be a list of 1-100 file names");
+      }
+      for (const n of names) {
+        if (!n || n === "." || n === ".." || /[/\\\0]/.test(n)) throw new Invalid(`'${n}' is not a bare file name`);
+        if (d.mediaLists.preset.includes(n)) throw new Invalid(`${n} is a preset; only files in /sdcard/pcMedia can be deleted`);
+        if (!d.mediaLists.custom.includes(n)) throw new Invalid(`not in /sdcard/pcMedia: ${n} (GET /api/media?refresh=1)`);
+      }
+      const gone = new Set(names);
+      d.mediaLists.custom = d.mediaLists.custom.filter((n) => !gone.has(n));
+      d.mediaLists.sizes = Object.fromEntries(Object.entries(d.mediaLists.sizes || {}).filter(([n]) => !gone.has(n)));
+      const sent = ["POST mediaDelete"];
+      const playlist = d.config.media.filter((m) => !gone.has(m));
+      const restartsVideo = playlist.length !== d.config.media.length;
+      if (restartsVideo) {
+        d.config.media = playlist.length ? playlist : [[...d.mediaLists.preset].sort()[0]];
+        sent.push("POST waterBlockScreenId");
+      }
+      return reply(200, {
+        ok: true, deleted: [...names], remaining: [], listedBy: "conn", sent, ...applied(), restartsVideo,
+        config: clone(d.config), media: clone(d.mediaLists),
+      });
+    },
+    // The page only fetches this after its <video> or <img> reports an error.
+    "GET /api/media/preview": () => reply(206, null),
     "POST /api/prefs": (body) => {
       const ch = {};
       if ("tempUnit" in body) {

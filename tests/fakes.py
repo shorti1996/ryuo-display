@@ -26,15 +26,21 @@ CUSTOM = ["2026-01-26_22-07-49-639.mp4", "2026-01-26_20-04-35-774.png"]
 
 class FakeDevice(ryuod.Device):
     """ryuod.Device with the worker replaced at submit(): every call is recorded as
-    (method, cmd, body, wait) and its Future resolves at once. Call close_pipe() on teardown."""
+    (method, cmd, body, wait) and its Future resolves at once. Call close_pipe() on teardown.
+
+    A mediaDelete takes its `include` names out of conn_media, as SerialService deletes the files
+    a later conn reply lists. With `deletes` False it is acked and changes nothing, the way a conn
+    reply that lists the folder as it was would look."""
 
     def __init__(self, state, sampler):
         super().__init__(state, sampler, "post")
-        self.media = {"source": "conn", "fetchedAt": 1792771200000, "preset": list(PRESET), "custom": list(CUSTOM)}
+        self.media = {"source": "conn", "fetchedAt": 1792771200000, "preset": list(PRESET), "custom": list(CUSTOM),
+                      "sizes": {}}
         self.submitted = []
         self.connected = True
         self.result = {"applied": True, "acked": True}
         self.conn_media = None  # media lists a refresh 'conn' would return; None = conn reply missing
+        self.deletes = True
 
     def submit(self, method, cmd, body, wait=0.25):
         if not self.connected:
@@ -42,6 +48,9 @@ class FakeDevice(ryuod.Device):
         self.submitted.append((method, cmd, body, wait))
         fut = concurrent.futures.Future()
         res = dict(self.result)
+        if cmd == "mediaDelete" and self.deletes and self.conn_media is not None and res.get("applied"):
+            gone = set(body.get("include", []))
+            self.conn_media = {**self.conn_media, "custom": [n for n in self.conn_media["custom"] if n not in gone]}
         if cmd == "conn":
             res["media"] = self.conn_media is not None
             if self.conn_media is not None:

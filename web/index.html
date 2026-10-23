@@ -100,9 +100,27 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
   background: radial-gradient(ellipse at 50% 120%, #bfc6cf 0%, #6b7380 35%, transparent 75%), linear-gradient(#ffffff10, #ffffff30); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--muted); font-size: 12.5px; }
 
-.media-list { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--surface-2); }
+.media-list { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--surface-2); }
 .media-list h3 { font-size: 12px; color: var(--muted); margin: 6px 0 2px; font-weight: 600; }
 .media-list label { display: flex; gap: 8px; align-items: center; padding: 2px 0; overflow-wrap: anywhere; }
+/* A Custom file: thumbnail (opens the preview), checkbox and name, size, Delete. */
+.mrow { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+.mrow label { flex: 1; min-width: 0; }
+.mrow .thumb { position: relative; flex: none; width: 64px; aspect-ratio: 2240 / 1080; padding: 0; border-radius: 4px; overflow: hidden; background: #050506; }
+.mrow .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* A play sign over every thumbnail, so it reads as the preview control. */
+.mrow .thumb::after {
+  content: "▶"; position: absolute; inset: 0; display: grid; place-items: center;
+  color: #fff; font-size: 12px; background: #00000040; opacity: .8; transition: opacity .15s, background .15s;
+}
+.mrow .thumb:hover::after, .mrow .thumb:focus-visible::after { opacity: 1; background: #00000080; }
+.media-list .hint { margin: 0 0 2px; }
+.mrow .size { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.mrow button.del { padding: 2px 10px; font-size: 12.5px; white-space: nowrap; }
+.mrow button.del.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
+#mediaPreview { margin: 10px 0; }
+#mediaPreview video, #mediaPreview img { display: block; width: 100%; aspect-ratio: 2240 / 1080; object-fit: contain; background: #050506; border-radius: 8px; margin-top: 6px; }
+#mediaPreview [hidden] { display: none; }
 .seg { display: inline-flex; justify-self: start; width: max-content; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .seg label { padding: 5px 12px; cursor: pointer; background: var(--surface-2); }
 .seg input { position: absolute; opacity: 0; pointer-events: none; }
@@ -156,9 +174,15 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
     <section>
       <h2>Background media</h2>
       <div class="media-list" id="media"></div>
+      <div id="mediaPreview" hidden>
+        <div class="inline"><span class="mono" id="mpName"></span><button id="mpClose" type="button">Close preview</button></div>
+        <video id="mpVideo" muted loop playsinline controls></video>
+        <img id="mpImage" alt="Preview of the selected file" hidden>
+        <p class="note" id="mpStatus" aria-live="polite"></p>
+      </div>
       <div class="row"><span>Play mode</span><select id="playMode"><option>Single</option><option>Cycle</option><option>Random</option></select></div>
       <div class="inline"><button id="refresh" type="button">Refresh list</button><button id="play" class="primary" type="button">Play (restarts the video)</button></div>
-      <p class="note">Files already on the cooler. Order of play is the order of the list.</p>
+      <p class="note">Files already on the cooler. Order of play is the order of the list. Delete needs a second click and cannot be undone.</p>
     </section>
     <section>
       <h2>Upload a video</h2>
@@ -342,19 +366,121 @@ async function sendPrefs(body) {
 }
 
 /* ---------- media ---------- */
+const DELETE_ARMED_MS = 4000;  // how long "Really delete?" waits for the second click
+let armed = null;              // {button, timer} of the Delete button waiting for its second click
+let previewName = null;
+const mediaUrl = (kind, name) => `/api/media/${kind}?name=${encodeURIComponent(name)}`;
+const isImage = (name) => /\.(png|jpe?g)$/i.test(name);
+function fmtSize(n) {
+  if (n == null) return "";
+  if (n < 1e6) return Math.max(1, Math.round(n / 1e3)) + " kB";
+  return (n < 1e7 ? (n / 1e6).toFixed(1) : String(Math.round(n / 1e6))) + " MB";
+}
 function renderMedia() {
+  disarm();
   const box = $("media"); box.textContent = "";
   const chosen = config ? config.media : [];
+  const sizes = mediaLists.sizes || {};
   for (const [key, label] of [["preset", "Preset (on the cooler)"], ["custom", "Custom (/sdcard/pcMedia)"]]) {
     const h = document.createElement("h3"); h.textContent = label; box.append(h);
     if (!mediaLists[key].length) { const e = document.createElement("div"); e.className = "note"; e.textContent = "none"; box.append(e); }
+    else if (key === "custom") {
+      const hint = document.createElement("div"); hint.className = "note hint";
+      hint.textContent = "Click a thumbnail to preview the file below this list.";
+      box.append(hint);
+    }
     for (const name of mediaLists[key]) {
       const l = document.createElement("label");
       const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = name; cb.checked = chosen.includes(name);
       const s = document.createElement("span"); s.className = "mono"; s.textContent = name;
-      l.append(cb, s); box.append(l);
+      l.append(cb, s);
+      // Presets live in /sdcard/pcMediaPreset, which mediaDelete cannot reach, and are not previewed.
+      if (key === "preset") { box.append(l); continue; }
+      const row = document.createElement("div"); row.className = "mrow";
+      const th = document.createElement("button"); th.type = "button"; th.className = "thumb";
+      th.title = "Click to preview"; th.setAttribute("aria-label", "Preview " + name);
+      const img = document.createElement("img"); img.alt = ""; img.setAttribute("loading", "lazy"); img.src = mediaUrl("thumb", name);
+      // No adb, or ffmpeg could not read the file: the play sign alone instead of a broken image.
+      img.addEventListener("error", () => img.remove());
+      th.append(img);
+      th.addEventListener("click", () => showPreview(name));
+      const size = document.createElement("span"); size.className = "size"; size.textContent = fmtSize(sizes[name]);
+      const del = document.createElement("button"); del.type = "button"; del.className = "del"; del.textContent = "Delete";
+      del.setAttribute("aria-label", "Delete " + name);
+      del.addEventListener("click", () => deleteClick(name, del));
+      row.append(th, l, size, del); box.append(row);
     }
   }
+}
+// Two clicks delete: the viewer refuses confirm() dialogs, and there is no undo.
+function deleteClick(name, btn) {
+  if (!armed || armed.button !== btn) {
+    disarm();
+    btn.textContent = "Really delete?"; btn.classList.add("armed");
+    armed = { button: btn, timer: setTimeout(disarm, DELETE_ARMED_MS) };
+    return;
+  }
+  clearTimeout(armed.timer); armed = null;
+  btn.classList.remove("armed"); btn.textContent = "Deleting…"; btn.disabled = true;
+  deleteMedia(name);
+}
+function disarm() {
+  if (!armed) return;
+  clearTimeout(armed.timer);
+  armed.button.textContent = "Delete"; armed.button.classList.remove("armed");
+  armed = null;
+}
+async function deleteMedia(name) {
+  try {
+    const j = await api("/api/media/delete", { names: [name] });
+    mediaLists = j.media;
+    // Only the playlist: the rest of j.config may predate an overlay edit still in its debounce.
+    if (config) config.media = j.config.media;
+    if (j.deleted.includes(previewName)) closePreview();
+    renderMedia();
+    if (j.remaining.length) { say(`Delete: ${j.remaining.join(", ")} is still on the cooler`, true); return; }
+    let text = `Deleted ${j.deleted.join(", ")}`;
+    if (j.restartsVideo) text += `; playlist now ${j.config.media.join(", ")}${j.applied === false ? ", sent when the cooler reconnects" : ""}`;
+    say(text);
+  } catch (e) { showResult(e, "Delete"); renderMedia(); }
+}
+function showPreview(name) {
+  const v = $("mpVideo"), im = $("mpImage"), image = isImage(name);
+  previewName = name;
+  $("mediaPreview").hidden = false;
+  $("mpName").textContent = name;
+  v.hidden = image; im.hidden = !image;
+  if (image) {
+    stopVideo(); im.src = mediaUrl("preview", name); $("mpStatus").textContent = "";
+    return;
+  }
+  im.removeAttribute("src");
+  $("mpStatus").textContent = "Preparing the preview. The file is copied from the cooler first, and an HEVC file is then converted, which takes a few seconds.";
+  v.src = mediaUrl("preview", name);
+  const p = v.play && v.play();
+  if (p && p.catch) p.catch(() => { /* autoplay refused; the controls still work */ });
+}
+function stopVideo() {
+  const v = $("mpVideo");
+  if (v.pause) v.pause();
+  v.removeAttribute("src");
+  if (v.load) v.load();  // drops the connection still streaming the old file
+}
+function closePreview() {
+  previewName = null;
+  stopVideo(); $("mpImage").removeAttribute("src");
+  $("mediaPreview").hidden = true; $("mpStatus").textContent = "";
+}
+// The media element reports only that it failed; a one-byte request fetches the daemon's reason.
+async function previewFailed() {
+  if (!previewName) return;
+  const name = previewName;
+  let why = "this browser cannot play the file";
+  try {
+    const r = await fetch(mediaUrl("preview", name), { headers: { Range: "bytes=0-0" } });
+    if (!r.ok) { let j = null; try { j = await r.json(); } catch (e) { /* not JSON */ } why = (j && j.error) || `HTTP ${r.status}`; }
+  } catch (e) { why = e.message; }
+  if (previewName === name) $("mpStatus").textContent = `Preview failed: ${why}`;
 }
 async function loadMedia(refresh) {
   try { const j = await api("/api/media" + (refresh ? "?refresh=1" : "")); mediaLists = j; renderMedia(); if (refresh) say(`Media list from ${j.source}`); }
@@ -473,6 +599,10 @@ for (const id of ["statsOn", "titleColor", "contentColor", "filterOn", "opacity"
 $("brightness").addEventListener("input", () => { syncLabels(); sendBrightness(); });
 $("refresh").addEventListener("click", () => loadMedia(true));
 $("play").addEventListener("click", play);
+$("mpClose").addEventListener("click", closePreview);
+$("mpVideo").addEventListener("loadeddata", () => { $("mpStatus").textContent = ""; });
+$("mpVideo").addEventListener("error", () => { if ($("mpVideo").getAttribute("src")) previewFailed(); });
+$("mpImage").addEventListener("error", () => { if ($("mpImage").getAttribute("src")) previewFailed(); });
 $("upGo").addEventListener("click", upload);
 $("upCancel").addEventListener("click", cancelUpload);
 document.querySelectorAll('input[name=unit]').forEach((r) => r.addEventListener("change", () => sendPrefs({ tempUnit: r.value })));

@@ -127,6 +127,7 @@ def test_compatible_file_is_pushed_unchanged_and_played(daemon, tmp_path):
     assert (method, cmd, cfg["media"], cfg["playMode"]) == ("POST", "waterBlockScreenId", [name], "Single")
     assert daemon.state.get()["media"] == [name]
     assert name in daemon.device.media["custom"]
+    assert daemon.device.media["sizes"][name] == len(data)
     assert os.listdir(daemon.upload_dir) == []  # job files removed
 
 

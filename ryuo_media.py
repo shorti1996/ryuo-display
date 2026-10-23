@@ -1,4 +1,5 @@
-"""Video files for the RYUO IV panel: probe, transcode when needed, adb push. Used by ryuod.py.
+"""Video files for the RYUO IV panel: probe, transcode when needed, adb push, and thumbnails and
+H.264 proxies so the browser can preview files already on the panel. Used by ryuod.py.
 
 HomeUI plays .mp4 files through Rockchip's rockit framework and the rk_mpp hardware decoder.
 FoxPodZ's decode tests on firmware 1.0.10 (ryuo-iv-screen, PROTOCOL.md "Native resolution works
@@ -223,22 +224,24 @@ def video_info(probed):
 
 def ffmpeg_info(text):
     """Minimal facts from `ffmpeg -i FILE` stderr, for when there is no ffprobe: the container,
-    the duration (for progress) and whether a video stream exists. Codec, size and pixel format
-    are left unknown, so plan() transcodes."""
+    the duration (for progress), and the first video stream's codec and pixel format (for the
+    browser preview). Size is left unknown, and plan() transcodes any file probed this way."""
     m = re.search(r"^Input #0, ([^,]+(?:,[^,\s]+)*), from ", text, re.M)
     if m is None:
         last = (text.strip().splitlines() or ["no output"])[-1]
         raise MediaError(f"ffmpeg cannot read this file: {last}")
     if is_still(m.group(1)):
         raise MediaError("this is a still image; choose a video file")
-    if not re.search(r"^\s*Stream #0:\d+\S*: Video: ", text, re.M):
+    # "Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709), 1920x960 ..."
+    v = re.search(r"^\s*Stream #0:\d+\S*: Video: (\w+)[^,\n]*(?:, (\w+))?", text, re.M)
+    if v is None:
         raise MediaError("no video stream in this file")
     d = re.search(r"Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)", text)
     duration = int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3)) if d else None
     # sar "unknown" makes video_filter square the pixels, a no-op for square ones.
-    return {"probed": False, "map": "v:0", "codec": None, "tag": None, "width": 0, "height": 0, "pix_fmt": None,
-            "sar": "unknown", "rotation": 0, "fps": None, "bitrate": None, "duration": duration, "streams": None,
-            "mp4": m.group(1).startswith("mov,mp4")}
+    return {"probed": False, "map": "v:0", "codec": v.group(1), "tag": None, "width": 0, "height": 0,
+            "pix_fmt": v.group(2), "sar": "unknown", "rotation": 0, "fps": None, "bitrate": None,
+            "duration": duration, "streams": None, "mp4": m.group(1).startswith("mov,mp4")}
 
 
 def inspect(path, t):
@@ -368,6 +371,47 @@ def convert(src, dst, info, action, fit, t, on_progress=None, cancel=None):
             on_progress(*got)
 
     run(ffmpeg_args(src, dst, info, action, fit, t), line, cancel, name="ffmpeg")
+
+
+# ---------------------------------------------------------------- browser preview
+
+THUMB_W = 320
+PROXY_W = 640
+
+
+def browser_plays(info):
+    """True if Chrome decodes the video stream as it is. It plays 8-bit 4:2:0 H.264 but not HEVC,
+    and every file the upload converts is HEVC."""
+    return info["codec"] == "h264" and info["pix_fmt"] in PIX_FMTS
+
+
+def thumbnail(src, dst, t):
+    """A THUMB_W px wide JPEG of the frame at 1 s, or of the first frame when the clip is shorter."""
+    part = dst + ".part"
+    for seek in (["-ss", "1"], []):
+        try:
+            run([t.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *seek, "-i", src,
+                 "-frames:v", "1", "-vf", f"scale={THUMB_W}:-2", "-q:v", "4", "-f", "image2", "-c:v", "mjpeg", part],
+                name="ffmpeg")
+        except MediaError:
+            # Seeking past the end: ffmpeg 7.0 exits 0 and writes nothing, 7.1 exits 234.
+            if not seek:
+                raise
+            continue
+        if os.path.exists(part) and os.path.getsize(part) > 0:
+            os.replace(part, dst)
+            return
+    raise MediaError("ffmpeg found no frame to make a thumbnail from")
+
+
+def proxy(src, dst, t):
+    """A PROXY_W px wide H.264 copy of the video stream for the browser, without sound. About 2 s
+    for 2 minutes of 1920x960 video; faststart puts the index first, so playback starts early."""
+    part = dst + ".part"
+    run([t.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", src, "-map", "0:v:0",
+         "-map_metadata", "-1", "-vf", f"scale={PROXY_W}:-2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+         "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", part], name="ffmpeg")
+    os.replace(part, dst)
 
 
 # ---------------------------------------------------------------- device side

@@ -6,7 +6,9 @@ hidraw fd: it runs the startup sequence, sends a PcInfo heartbeat every second (
 drops to standby after 5 s of silence) and reconnects after USB loss, suspend, or a
 HomeUI restart. Settings persist in ~/.config/ryuo/state.json. A video uploaded through the
 page is converted on an upload thread when the panel cannot play it as it is (ryuo_media.py),
-pushed with adb and played.
+pushed with adb and played. Files in /sdcard/pcMedia can be deleted from the page, and previewed
+there from copies pulled with adb: a thumbnail, and an H.264 proxy for the HEVC files Chrome
+cannot decode.
 """
 import argparse
 import collections
@@ -20,6 +22,7 @@ import json
 import os
 import re
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -40,7 +43,11 @@ MAX_BODY = 16 * 1024
 MAX_UPLOAD = 4 * 2**30      # bytes, for POST /api/media/upload
 UPLOAD_CHUNK = 2**20
 UPLOAD_IDLE_S = 60          # an upload that sends nothing for this long is dropped
+PREVIEW_CAP = 500 * 2**20   # bytes of pulled files, thumbnails and proxies kept under the cache dir
 MAX_MEDIA = 20
+MAX_DELETE = 100            # names in one POST /api/media/delete
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 LATE_ACK_S = 1.5   # a command's ack can queue behind HomeUI's slower POST all ack
 COLOR_RE = re.compile(r"#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})")
 SENSOR_RE = re.compile(r"([A-Za-z0-9_.-]+):(temp[0-9]+)")
@@ -595,7 +602,8 @@ class Device(threading.Thread):
         self.ready = False          # startup sequence finished on the open fd
         self.ids = None
         self.info = {}              # parsed conn reply
-        self.media = {"source": None, "fetchedAt": None, "preset": [], "custom": []}
+        # sizes: bytes per custom file, from `adb shell ls -l`; the conn reply has names only.
+        self.media = {"source": None, "fetchedAt": None, "preset": [], "custom": [], "sizes": {}}
         self.last_write = 0.0
         self.last_hb_ok = None      # boottime of the last heartbeat write
         self.last_hb_wall = None    # monotonic, for the age shown in /api/state
@@ -737,8 +745,7 @@ class Device(threading.Thread):
             self.set_media_from_conn(body)
         st = self.state.get()
         if not st["media"]:
-            names = sorted(self.media["preset"]) or ["RYUO_IV_HW_Info_01.mp4"]
-            st = self.state.update({"media": names[:1]})
+            st = self.state.update({"media": self.first_preset()})
         self.call("POST", "temperature", {"value": st["tempUnit"]}, wait=0.3)
         # isBlockScreen gates brightness; without this the brightness step is ignored
         self.call("POST", "waterBlockScreen", {"enable": True}, wait=0.3)
@@ -762,12 +769,18 @@ class Device(threading.Thread):
         self.next_hb = 0.0
         self.heartbeat()
 
+    def first_preset(self):
+        """The playlist for an empty one: the first preset by name."""
+        return (sorted(self.media["preset"]) or ["RYUO_IV_HW_Info_01.mp4"])[:1]
+
     def set_media_from_conn(self, body):
         self.info = body
         media = body.get("media") or {}
+        custom = [m for m in media.get("custom", []) if isinstance(m, str)]
+        sizes = self.media.get("sizes") or {}
         self.media = {"source": "conn", "fetchedAt": int(time.time() * 1000),
                       "preset": [m for m in media.get("preset", []) if isinstance(m, str)],
-                      "custom": [m for m in media.get("custom", []) if isinstance(m, str)]}
+                      "custom": custom, "sizes": {n: s for n, s in sizes.items() if n in custom}}
 
     def call(self, method, cmd, body, wait):
         """Write one frame (at most 8/s), then read until its ack or `wait` s. (acked, ack body)."""
@@ -884,7 +897,7 @@ class Device(threading.Thread):
 
 def adb_media():
     try:
-        out = subprocess.run(["adb", "shell", "ls -1 /sdcard/pcMediaPreset /sdcard/pcMedia"],
+        out = subprocess.run([*M.ADB, "shell", "ls -1 /sdcard/pcMediaPreset /sdcard/pcMedia"],
                              capture_output=True, text=True, timeout=5).stdout
     except (OSError, subprocess.SubprocessError):
         return None
@@ -897,7 +910,61 @@ def adb_media():
             lists[cur].append(line)
     if cur is None:
         return None
-    return {"source": "adb", "fetchedAt": int(time.time() * 1000), **lists}
+    return {"source": "adb", "fetchedAt": int(time.time() * 1000), **lists, "sizes": {}}
+
+
+def adb_sizes(names):
+    """{name: bytes} for the given files in /sdcard/pcMedia, from `ls -l`; {} when adb fails.
+
+    A line is matched by the known name at its end, so the date format in between does not
+    matter. Longer names are tried first, so "a b.mp4" is not read as "b.mp4"."""
+    try:
+        out = subprocess.run([*M.ADB, "shell", "ls -l " + shlex.quote(P.MEDIA_DIR)],
+                             capture_output=True, text=True, errors="replace", timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    by_length = sorted(names, key=len, reverse=True)
+    sizes = {}
+    for line in out.splitlines():
+        if not line.startswith("-"):  # regular files only
+            continue
+        name = next((n for n in by_length if line.endswith(" " + n)), None)
+        if name is not None:
+            # mode, links, owner, group, size, then the date
+            fields = line[:-len(name)].split()
+            if len(fields) > 4 and fields[4].isdigit():
+                sizes[name] = int(fields[4])
+    return sizes
+
+
+def adb_delete(names):
+    """`adb shell rm -f` for files in /sdcard/pcMedia. None on success, else what went wrong."""
+    cmd = "rm -f " + " ".join(shlex.quote(P.MEDIA_DIR + n) for n in names)
+    try:
+        r = subprocess.run([*M.ADB, "shell", cmd], capture_output=True, text=True, errors="replace", timeout=10)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"adb: {e}"
+    if r.returncode != 0:
+        last = (r.stderr.strip().splitlines() or ["no error output"])[-1]
+        return f"adb rm exited with {r.returncode}: {last}"
+    return None
+
+
+def refresh_media(dev):
+    """Re-read the device media list into dev.media: the conn reply, else adb. Known sizes are
+    kept for files still listed. Returns "conn" or "adb", or None when neither gave a list."""
+    sizes = dev.media.get("sizes") or {}
+    fut = dev.submit("POST", "conn", {"OS": "Linux"}, wait=1.5)
+    got = False
+    if fut is not None:
+        with contextlib.suppress(concurrent.futures.TimeoutError):
+            got = fut.result(3).get("media", False)
+    if not got:
+        fallback = adb_media()
+        if fallback is None:
+            return None
+        dev.media = {**fallback, "sizes": {n: s for n, s in sizes.items() if n in fallback["custom"]}}
+    return dev.media["source"]
 
 
 def select_playlist(d, media, mode):
@@ -917,6 +984,112 @@ def select_playlist(d, media, mode):
     if not P.fits("POST", "waterBlockScreenId", cfg):
         raise Invalid("playlist too long for one HID report")
     return cfg, d.state.update({"media": media, "playMode": mode})
+
+
+# ---------------------------------------------------------------- deleting device media
+
+def bare_name(name):
+    """True for a file name without a path: mediaDelete joins it onto sdcard/pcMedia/ as it is."""
+    return bool(name) and name not in (".", "..") and not any(c in name for c in "/\\\0")
+
+
+def check_delete(dev, names):
+    """Validate names for POST /api/media/delete against the device media list; duplicates dropped."""
+    if not isinstance(names, list) or not 1 <= len(names) <= MAX_DELETE or not all(isinstance(n, str) for n in names):
+        raise Invalid(f"names must be a list of 1-{MAX_DELETE} file names")
+    names = list(dict.fromkeys(names))
+    for n in names:
+        if not bare_name(n):
+            raise Invalid(f"{n!r} is not a bare file name")
+        if n in dev.media["preset"]:
+            raise Invalid(f"{n} is a preset; only files in /sdcard/pcMedia can be deleted")
+        if n not in dev.media["custom"]:
+            raise Invalid(f"not in /sdcard/pcMedia: {n} (GET /api/media?refresh=1)")
+    return names
+
+
+def delete_bodies(names):
+    """mediaDelete bodies holding as many names as one HID report fits. One name always fits:
+    Android caps a file name at 255 bytes. Never `exclude`: it deletes every file it does not name."""
+    bodies = []
+    for n in names:
+        if bodies and P.fits("POST", "mediaDelete", {"include": [*bodies[-1]["include"], n]}):
+            bodies[-1]["include"].append(n)
+        else:
+            bodies.append({"include": [n]})
+    return bodies
+
+
+def job_result(fut, timeout=3):
+    """A worker job's result; None when the cooler is disconnected or the worker did not answer."""
+    if fut is None:
+        return None
+    try:
+        return fut.result(timeout)
+    except concurrent.futures.TimeoutError:
+        return None
+
+
+def delete_media(d, names):
+    """Delete validated custom files from the panel, re-list, and drop them from the playlist.
+
+    mediaDelete goes through the device worker. SerialService acks it with 1 200 whether or not
+    the file existed, so only the re-list shows what went. adb rm -f takes over when the worker
+    cannot send it, and checks again when the re-list still names a file: the conn reply may list
+    the folder as it was. Returns the response fields; raises M.MediaError when neither reached
+    the panel."""
+    dev = d.device
+    sent = []
+    last = {"applied": True, "acked": False}
+    for body in delete_bodies(names):
+        res = job_result(dev.submit("POST", "mediaDelete", body, wait=1.0))
+        if not res or not res.get("applied"):
+            break
+        last = res
+    else:
+        sent.append("POST mediaDelete")
+    if not sent:
+        err = adb_delete(names)
+        if err:
+            raise M.MediaError(f"the cooler did not take mediaDelete over HID, and {err}")
+        sent.append("adb shell rm")
+        last = {"applied": True, "acked": False}
+    listed = refresh_media(dev)
+    left = [n for n in names if n in dev.media["custom"]] if listed else []
+    if left and adb_delete(left) is None:
+        if "adb shell rm" not in sent:
+            sent.append("adb shell rm")
+        fallback = adb_media()
+        if fallback is not None:
+            sizes = dev.media.get("sizes") or {}
+            dev.media = {**fallback, "sizes": {n: s for n, s in sizes.items() if n in fallback["custom"]}}
+            listed = "adb"
+            left = [n for n in left if n in dev.media["custom"]]
+    deleted = [n for n in names if n not in left]
+    # Without any re-list the names are dropped on the ack alone, as the upload adds them on push.
+    dev.media = {**dev.media, "custom": [n for n in dev.media["custom"] if n not in deleted],
+                 "sizes": {n: s for n, s in (dev.media.get("sizes") or {}).items() if n not in deleted}}
+    for n in deleted:
+        d.preview.drop(n)
+    if deleted:
+        log(f"media: deleted {', '.join(deleted)} ({sent[0]})")
+
+    st = d.state.get()
+    playlist = [m for m in st["media"] if m not in deleted]
+    restarts = playlist != st["media"]
+    if restarts:
+        # HomeUI skips a missing file and retries it every 3 s, and with none left it plays nothing.
+        st = d.state.update({"media": playlist or dev.first_preset()})
+        cfg, _ = fitted_config(st)
+        fut = dev.submit("POST", "waterBlockScreenId", cfg, 1.0)
+        # Saved either way; the startup sequence sends it on reconnect.
+        last = {"applied": False, "acked": False}
+        if fut is not None:
+            last = job_result(fut) or {"applied": True, "acked": False}
+        sent.append("POST waterBlockScreenId")
+    return {"deleted": deleted, "remaining": left, "listedBy": listed, "sent": sent,
+            "applied": last.get("applied", False), "acked": last.get("acked", False), "restartsVideo": restarts,
+            "config": public_config(st), "media": dict(dev.media)}
 
 
 # ---------------------------------------------------------------- video upload
@@ -1014,7 +1187,8 @@ class Upload(threading.Thread):
         self.set(state="pushing", progress=None, speed=None, name=name)
         M.push(out, name, P.MEDIA_DIR, self.cancel_)
         dev = self.d.device
-        dev.media = {**dev.media, "custom": [*dev.media["custom"], name]}
+        dev.media = {**dev.media, "custom": [*dev.media["custom"], name],
+                     "sizes": {**(dev.media.get("sizes") or {}), name: os.path.getsize(out)}}
         self.set(state="starting")
         cfg, _ = select_playlist(self.d, [name], "Single")
         fut = dev.submit("POST", "waterBlockScreenId", cfg, 1.0)
@@ -1026,6 +1200,134 @@ class Upload(threading.Thread):
                 res = {"applied": True, "acked": False}
         self.set(state="done", applied=res.get("applied"), acked=res.get("acked"))
         log(f"upload: playing {name}")
+
+
+# ---------------------------------------------------------------- previews of device media
+
+def default_preview_dir():
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "ryuo", "preview")
+
+
+def byte_range(header, size):
+    """(start, end) for a single-range Range header; None to send the whole file, which covers
+    no header, several ranges and malformed ones; False for a range that starts past the end (416)."""
+    m = RANGE_RE.fullmatch((header or "").strip())
+    if not m or not (m.group(1) or m.group(2)):
+        return None
+    first, last = m.group(1), m.group(2)
+    if not first:  # "bytes=-N": the last N bytes
+        return (max(0, size - int(last)), size - 1) if int(last) and size else False
+    start = int(first)
+    if last and int(last) < start:
+        return None  # "bytes=9-3" is invalid, and an invalid Range is ignored
+    if start >= size:
+        return False
+    return start, min(int(last), size - 1) if last else size - 1
+
+
+def media_ext(name):
+    ext = os.path.splitext(name)[1].lower()
+    return ext if re.fullmatch(r"\.[a-z0-9]{1,8}", ext) else ""
+
+
+class Previews:
+    """Thumbnails and browser-playable copies of the files in /sdcard/pcMedia.
+
+    A file is pulled with adb once, into its own directory under ~/.cache/ryuo/preview/, and the
+    thumbnail and proxy are made from that copy. The work runs on the HTTP thread that asked for
+    it, and adb and ffmpeg run at nice 10 (ryuo_media.run), so a 98 MB pull plus a proxy encode
+    (about 6 s) does not hold up the device worker or its heartbeat. The directory is emptied at
+    startup; past PREVIEW_CAP bytes the least recently used entries are removed."""
+
+    def __init__(self, root, cap=PREVIEW_CAP):
+        self.root, self.cap = root, cap
+        self.lock = threading.Lock()
+        self.locks = {}                     # name -> Lock, held while that entry is pulled or made
+        self.pull_lock = threading.Lock()   # one adb transfer at a time
+        self.direct = {}                    # name -> True when the browser plays the pulled file
+
+    def entry(self, name):
+        with self.lock:
+            return self.locks.setdefault(name, threading.Lock())
+
+    def source(self, name, size):
+        """The pulled copy of a device file. Pulled again when the panel's copy has another size."""
+        d = os.path.join(self.root, name)
+        src = os.path.join(d, "source" + media_ext(name))
+        if os.path.exists(src) and size in (None, os.path.getsize(src)):
+            os.utime(d)  # the directory's mtime orders the entries for trim()
+            return src
+        shutil.rmtree(d, ignore_errors=True)
+        self.direct.pop(name, None)
+        os.makedirs(d)
+        try:
+            with self.pull_lock:
+                M.run([*M.ADB, "pull", P.MEDIA_DIR + name, src + ".part"], name="adb pull")
+            os.replace(src + ".part", src)
+        except BaseException:
+            shutil.rmtree(d, ignore_errors=True)
+            raise
+        self.trim(keep=name)
+        return src
+
+    def thumb(self, name, size):
+        """(path, Content-Type) of the thumbnail. An image file is its own thumbnail."""
+        ext = media_ext(name)
+        with self.entry(name):
+            src = self.source(name, size)
+            if ext in IMAGE_TYPES:
+                return src, IMAGE_TYPES[ext]
+            out = os.path.join(os.path.dirname(src), "thumb.jpg")
+            if not os.path.exists(out):
+                M.thumbnail(src, out, M.tools())
+            return out, "image/jpeg"
+
+    def preview(self, name, size):
+        """(path, Content-Type) of something the browser shows: the pulled file for H.264 and
+        images, else an H.264 proxy (ryuo_media.PROXY_W px wide)."""
+        ext = media_ext(name)
+        with self.entry(name):
+            src = self.source(name, size)
+            if ext in IMAGE_TYPES:
+                return src, IMAGE_TYPES[ext]
+            if name not in self.direct:
+                self.direct[name] = M.browser_plays(M.inspect(src, M.tools()))
+            if self.direct[name]:
+                return src, "video/mp4"
+            out = os.path.join(os.path.dirname(src), "proxy.mp4")
+            if not os.path.exists(out):
+                M.proxy(src, out, M.tools())
+                self.trim(keep=name)
+            return out, "video/mp4"
+
+    def drop(self, name):
+        with self.entry(name):
+            shutil.rmtree(os.path.join(self.root, name), ignore_errors=True)
+            self.direct.pop(name, None)
+
+    def trim(self, keep):
+        """Remove the least recently used entries until the cache is under its cap. Skips `keep`
+        and any entry another thread is pulling or encoding."""
+        entries = []
+        with contextlib.suppress(OSError):
+            for e in os.scandir(self.root):
+                if e.is_dir(follow_symlinks=False):
+                    size = sum(f.stat().st_size for f in os.scandir(e.path) if f.is_file(follow_symlinks=False))
+                    entries.append((e.stat().st_mtime, size, e.name))
+        total = sum(size for _, size, _ in entries)
+        for _, size, name in sorted(entries):
+            if total <= self.cap:
+                break
+            lock = self.entry(name)
+            if name == keep or not lock.acquire(blocking=False):
+                continue
+            try:
+                shutil.rmtree(os.path.join(self.root, name), ignore_errors=True)
+                self.direct.pop(name, None)
+            finally:
+                lock.release()
+            total -= size
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -1082,7 +1384,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
         route = {"/api/state": self.get_state, "/api/stats": self.get_stats,
-                 "/api/catalog": self.get_catalog, "/api/media": self.get_media}.get(path)
+                 "/api/catalog": self.get_catalog, "/api/media": self.get_media,
+                 "/api/media/thumb": self.get_thumb, "/api/media/preview": self.get_preview}.get(path)
         if route is None:
             return self.error(404, "not found")
         route(query)
@@ -1095,7 +1398,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.post_upload(query)  # a raw file body, too large for the JSON path below
         route = {"/api/overlay": self.post_overlay, "/api/brightness": self.post_brightness,
                  "/api/media/select": self.post_media_select, "/api/prefs": self.post_prefs,
-                 "/api/media/upload/cancel": self.post_upload_cancel}.get(path)
+                 "/api/media/upload/cancel": self.post_upload_cancel,
+                 "/api/media/delete": self.post_media_delete}.get(path)
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -1155,18 +1459,76 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def get_media(self, query):
         dev = self.d.device
-        if "refresh=1" in query.split("&") or not dev.media["source"]:
-            fut = dev.submit("POST", "conn", {"OS": "Linux"}, wait=1.5)
-            got = False
-            if fut is not None:
-                with contextlib.suppress(concurrent.futures.TimeoutError):
-                    got = fut.result(3).get("media", False)
-            if not got:
-                fallback = adb_media()
-                if fallback is None:
-                    return self.error(504, "neither the conn reply nor adb gave a media list")
-                dev.media = fallback
+        if ("refresh=1" in query.split("&") or not dev.media["source"]) and refresh_media(dev) is None:
+            return self.error(504, "neither the conn reply nor adb gave a media list")
+        sizes = dev.media.get("sizes") or {}
+        unknown = [n for n in dev.media["custom"] if n not in sizes]
+        if unknown and (found := adb_sizes(unknown)):
+            dev.media = {**dev.media, "sizes": {**sizes, **found}}
         self.reply(200, {"ok": True, **dev.media})
+
+    def media_file(self, query, make):
+        """Serve make(name, size) for ?name=, a file in /sdcard/pcMedia."""
+        # <img> and <video> load across origins without a preflight. Refusing other sites' pages
+        # stops them from making the daemon pull and encode files.
+        if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+            return self.error(403, "only the ryuod page can load media previews")
+        name = urllib.parse.parse_qs(query).get("name", [""])[0]
+        dev = self.d.device
+        if not bare_name(name) or name not in dev.media["custom"]:
+            return self.error(404, f"not in /sdcard/pcMedia: {name} (GET /api/media?refresh=1)")
+        try:
+            path, ctype = make(name, (dev.media.get("sizes") or {}).get(name))
+        except (M.MediaError, M.Cancelled, OSError) as e:
+            return self.error(502, str(e))
+        self.send_file(path, ctype)
+
+    def get_thumb(self, query):
+        self.media_file(query, self.d.preview.thumb)
+
+    def get_preview(self, query):
+        self.media_file(query, self.d.preview.preview)
+
+    def send_file(self, path, ctype):
+        """Send a file whole, or the single byte range in a Range header (206), which <video>
+        needs to seek. A range past the end gets 416; any other Range form gets the whole file."""
+        if not os.path.isfile(path):
+            return self.error(404, "preview file is gone; reload it")
+        with open(path, "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            rng = byte_range(self.headers.get("Range"), size)
+            if rng is False:
+                data = json.dumps({"ok": False, "error": f"range not satisfiable; the file is {size} bytes"}).encode()
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            start, end = rng or (0, size - 1)
+            self.send_response(206 if rng else 200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Accept-Ranges", "bytes")
+            if rng:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            # Names carry a millisecond timestamp and are never reused, so a name's bytes never change.
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.end_headers()
+            f.seek(start)
+            left = end - start + 1
+            try:
+                while left > 0:
+                    chunk = f.read(min(2**16, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                # A <video> drops its request whenever it seeks.
+                self.close_connection = True
 
     # -- POST
 
@@ -1270,6 +1632,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         job.start()
         self.reply(202, {"ok": True, "upload": job.snapshot()})
 
+    def post_media_delete(self, body):
+        """Delete files from /sdcard/pcMedia. JSON only, like every other POST here: a JSON body
+        needs a CORS preflight, which OPTIONS refuses, so other web pages cannot delete files."""
+        d = self.d
+        with d.media_lock:
+            names = check_delete(d.device, body.get("names"))
+            try:
+                res = delete_media(d, names)
+            except M.MediaError as e:
+                return self.error(503, str(e))
+        self.reply(200, {"ok": True, **res})
+
     def post_upload_cancel(self, _body):
         job = self.d.upload
         if job is None or job.finished:
@@ -1311,6 +1685,8 @@ class Daemon:
     upload = None               # the current or last Upload
     upload_lock = threading.Lock()
     upload_dir = default_upload_dir()
+    preview = Previews(default_preview_dir())
+    media_lock = threading.Lock()   # one delete at a time
 
 
 def is_ryuod(pid):
@@ -1360,8 +1736,9 @@ def main():
         log("stopped the previous driver")
     P.write_pidfile()
     d = Daemon()
-    # Jobs left behind by a daemon that was killed mid-upload.
+    # Jobs left behind by a daemon that was killed mid-upload, and the previous run's previews.
     shutil.rmtree(d.upload_dir, ignore_errors=True)
+    shutil.rmtree(d.preview.root, ignore_errors=True)
     d.state = State(a.state)
     httpd.daemon_ref = d
     d.sampler = Sampler(d.state)

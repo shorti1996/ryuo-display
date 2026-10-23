@@ -56,7 +56,10 @@ class Api:
 @pytest.fixture
 def api(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "local_timezone", lambda: "Europe/Warsaw")
+    # GET /api/media asks adb for the sizes it lacks; test_device_media.py covers that.
+    monkeypatch.setattr(ryuod, "adb_sizes", lambda names: {})
     d = ryuod.Daemon()
+    d.preview = ryuod.Previews(str(tmp_path / "preview"))
     d.state = ryuod.State(str(tmp_path / "config" / "ryuo" / "state.json"))
     d.state.update({"media": ["RYUO_IV_HW_Info_04.mp4"]})
     d.sampler = ryuod.Sampler(d.state)  # never started; tests fill its snapshot by hand
@@ -168,7 +171,8 @@ def test_get_catalog(api):
 def test_get_media_cached(api):
     status, _, body = api.get("/api/media")
     assert status == 200
-    assert body == {"ok": True, "source": "conn", "fetchedAt": 1792771200000, "preset": PRESET, "custom": CUSTOM}
+    assert body == {"ok": True, "source": "conn", "fetchedAt": 1792771200000, "preset": PRESET, "custom": CUSTOM,
+                    "sizes": {}}
     assert api.sent == []
 
 
@@ -190,7 +194,7 @@ def test_get_media_falls_back_to_adb(api, monkeypatch):
     status, _, body = api.get("/api/media")
     assert status == 200
     assert api.sent == [("POST", "conn", {"OS": "Linux"})]
-    assert body == {"ok": True, **fallback}
+    assert body == {"ok": True, **fallback, "sizes": {}}
 
 
 def test_get_media_504_when_both_fail(api, monkeypatch):
