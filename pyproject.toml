@@ -3,8 +3,12 @@ name = "rog-ryuo-lcd"
 version = "0.1.0"
 description = "Linux driver, stats daemon and tray for the ASUS ROG RYUO IV pump LCD"
 requires-python = ">=3.12"
-# Runtime is the standard library only; the tray also needs PySide6 (python3-pyside6 on Fedora).
-dependencies = []
+# Runtime is the standard library plus the ffmpeg and adb binaries; the tray also needs PySide6
+# (python3-pyside6 on Fedora). imageio-ffmpeg supplies an ffmpeg binary when none is on PATH;
+# ryuod imports it only for that fallback and runs without it.
+dependencies = [
+    "imageio-ffmpeg>=0.6.0",
+]
 
 [dependency-groups]
 dev = [
@@ -14,6 +18,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 125

@@ -108,6 +108,8 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
 .seg input { position: absolute; opacity: 0; pointer-events: none; }
 .seg label:has(input:checked) { background: var(--accent); color: #fff; }
 .seg label:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: -2px; }
+#upBar { width: 100%; margin-top: 10px; accent-color: var(--accent); }
+#upStatus.bad { color: var(--bad); }
 @media (max-width: 520px) { .row { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
 </style>
 </head>
@@ -157,6 +159,18 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
       <div class="row"><span>Play mode</span><select id="playMode"><option>Single</option><option>Cycle</option><option>Random</option></select></div>
       <div class="inline"><button id="refresh" type="button">Refresh list</button><button id="play" class="primary" type="button">Play (restarts the video)</button></div>
       <p class="note">Files already on the cooler. Order of play is the order of the list.</p>
+    </section>
+    <section>
+      <h2>Upload a video</h2>
+      <div class="row"><span>File</span><input type="file" id="upFile" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v"></div>
+      <div class="row"><span>Shape</span><select id="upFit">
+        <option value="crop">Fill the panel (crops the edges)</option>
+        <option value="pad">Whole frame (black bars)</option>
+      </select></div>
+      <div class="inline"><button id="upGo" class="primary" type="button">Upload and play</button><button id="upCancel" type="button" hidden>Cancel</button></div>
+      <progress id="upBar" max="1" hidden></progress>
+      <p class="note" id="upStatus" aria-live="polite"></p>
+      <p class="note">A video the panel can't play as it is gets converted to 2240×1080 HEVC first, without sound. Shape applies only then. The finished file is added to Custom and plays on a loop.</p>
     </section>
     <section>
       <h2>Units</h2>
@@ -350,6 +364,68 @@ async function play() {
   catch (e) { showResult(e, "Play"); }
 }
 
+/* ---------- upload ---------- */
+const UP_ACTIVE = new Set(["receiving", "probing", "converting", "pushing", "starting"]);
+const UP_DONE = { copy: "sent as it was", remux: "repackaged without re-encoding", transcode: "converted" };
+let upXhr = null, upCancelled = false, upWatch = null;
+function pct(x) { return Math.round(x * 100) + " %"; }
+function renderUpload(u) {
+  const active = !!u && UP_ACTIVE.has(u.state);
+  $("upGo").disabled = active; $("upCancel").hidden = !active;
+  const bar = $("upBar"); bar.hidden = !active;
+  if (active) { if (u.progress == null) bar.removeAttribute("value"); else bar.value = u.progress; }
+  $("upStatus").classList.toggle("bad", !!u && u.state === "error");
+  if (!u) { $("upStatus").textContent = ""; return; }
+  const file = u.file || "the file", amount = u.progress != null ? ": " + pct(u.progress) : "…";
+  let text = {
+    receiving: `Uploading ${file}${amount}`,
+    probing: `Checking ${file}…`,
+    converting: (u.action === "remux" ? "Repackaging as MP4" : `Converting to 2240×1080 HEVC with ${u.encoder}`) + amount + (u.speed ? ` at ${u.speed}` : ""),
+    pushing: "Copying to the cooler over adb…",
+    starting: "Starting playback…",
+    done: `Playing ${u.name}${u.applied === false ? " once the cooler reconnects" : ""}, ${UP_DONE[u.action] || u.action}`,
+    error: `Upload failed: ${u.error}`,
+    cancelled: "Upload cancelled",
+  }[u.state] || u.state;
+  if (u.reason && (u.state === "converting" || (u.state === "done" && u.action === "transcode"))) text += `. Reason: ${u.reason}`;
+  $("upStatus").textContent = text;
+}
+function onUploadState(u) {
+  if (upXhr || !u) return;  // the XHR's own progress events drive the display while sending
+  renderUpload(u);
+  if (UP_ACTIVE.has(u.state)) upWatch = u.startedAt;  // also a job started before this page loaded
+  if (u.state === "done" && upWatch === u.startedAt) {
+    upWatch = null;
+    // The daemon has already added the name to its cached list; no device round trip needed.
+    loadMedia(false).then(() => { if (config) { config.media = [u.name]; $("playMode").value = "Single"; renderMedia(); } });
+  }
+}
+function upload() {
+  const f = $("upFile").files[0];
+  if (!f) { showResult(new Error("choose a video file first"), "Upload"); return; }
+  const xhr = upXhr = new XMLHttpRequest();
+  upCancelled = false;
+  xhr.open("POST", "/api/media/upload?fit=" + encodeURIComponent($("upFit").value));
+  xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  xhr.setRequestHeader("X-Filename", encodeURIComponent(f.name));
+  xhr.upload.onprogress = (e) => { if (e.lengthComputable) renderUpload({ state: "receiving", file: f.name, progress: e.loaded / e.total }); };
+  xhr.onloadend = () => {
+    upXhr = null;
+    let j = null;
+    try { j = JSON.parse(xhr.responseText); } catch (e) { /* no JSON body */ }
+    if (xhr.status === 202 && j && j.ok) { upWatch = j.upload.startedAt; renderUpload(j.upload); return; }
+    if (upCancelled) { renderUpload({ state: "cancelled" }); return; }
+    renderUpload({ state: "error", error: (j && j.error) || (xhr.status ? `HTTP ${xhr.status}` : "the connection to ryuod dropped") });
+  };
+  renderUpload({ state: "receiving", file: f.name, progress: 0 });
+  xhr.send(f);
+}
+async function cancelUpload() {
+  upCancelled = true;
+  try { await api("/api/media/upload/cancel", {}); } catch (e) { /* already finished */ }
+  if (upXhr) upXhr.abort();
+}
+
 /* ---------- polling ---------- */
 function age(ms) { return ms == null ? "—" : (ms < 10000 ? (ms / 1000).toFixed(1) + " s" : Math.round(ms / 1000) + " s"); }
 async function pollState() {
@@ -363,6 +439,7 @@ async function pollState() {
     $("rec").textContent = d.recoveries ? `recoveries ${d.recoveries}` : "";
     $("err").textContent = d.lastError && !d.connected ? d.lastError : "";
     if (!config) applyConfig(j.config);
+    onUploadState(j.upload);
   } catch (e) {
     $("dot").className = "dot bad"; $("conn").textContent = "daemon unreachable"; $("err").textContent = e.message;
   }
@@ -386,6 +463,8 @@ for (const id of ["statsOn", "titleColor", "contentColor", "filterOn", "opacity"
 $("brightness").addEventListener("input", () => { syncLabels(); sendBrightness(); });
 $("refresh").addEventListener("click", () => loadMedia(true));
 $("play").addEventListener("click", play);
+$("upGo").addEventListener("click", upload);
+$("upCancel").addEventListener("click", cancelUpload);
 document.querySelectorAll('input[name=unit]').forEach((r) => r.addEventListener("change", () => sendPrefs({ tempUnit: r.value })));
 $("memMHz").addEventListener("change", () => {
   const v = parseInt($("memMHz").value, 10);

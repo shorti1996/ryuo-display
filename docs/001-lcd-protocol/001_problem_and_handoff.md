@@ -168,7 +168,7 @@ ContentType=json\r\n
 | 2 | split `ryuo.py` into a protocol module + CLI, add a reconnect loop (reopen hidraw when the cooler re-enumerates, e.g. after suspend) | yes |
 | 3 | daemon with a local control socket or D-Bus (select, brightness, pause) that the CLI talks to | yes |
 | 4 | tray icon + GUI client on top of #3, per the research answer | after #3 |
-| 5 | optional: ffmpeg transcode to 2240×1080 H.264 before push | independent |
+| 5 | ffmpeg transcode to 2240×1080 HEVC before push: done as the control page's upload (`ryuo_media.py`, `POST /api/media/upload`) | independent |
 
 Ship #1 by itself first. Keep it separate from the GUI work.
 
@@ -262,8 +262,10 @@ Traps:
 
 - **Images**: `.png`/`.jpg` go to an ImageView in `setLayout1Path`. That's from the code; not
   tested on the panel. One such file is already on the device (`2026-01-26_20-04-35-774.png`).
-- **Video formats**: only H.264 MP4 has been played. The Rockchip `media.c2` codecs probably handle
-  HEVC as well, but that's untested and decides whether step 5 needs to transcode.
+- **Video formats**: only H.264 MP4 has been played here. FoxPodZ's tests on firmware 1.0.10 found
+  that H.264 stops at about 1920 px wide (2240×1080 H.264 stays black) and that 2240×1080 HEVC tagged
+  `hvc1` plays. `ryuo_media.py` follows that, so the upload sends 2240×1080 HEVC. Not yet confirmed
+  on this panel.
 - **Is `conn` needed?** `play` sends it first like the Windows app does. Whether
   `waterBlockScreenId` works without it is untested; that matters for a daemon reconnecting quietly.
 - **Sysinfo overlay**: `sysinfoDisplay` + a full `PcInfo` heartbeat (CPU/GPU temperature, load,

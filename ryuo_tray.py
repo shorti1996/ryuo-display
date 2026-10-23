@@ -154,7 +154,7 @@ class Tray:
 
 
 def main():
-    lock = open(LOCK, "w")
+    lock = open(LOCK, "w")  # noqa: SIM115 - open for the life of the process; closing it drops the flock
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
