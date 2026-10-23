@@ -1,9 +1,35 @@
 # Delete and preview on-device media from the web page
 
-Status: investigated, nothing implemented. Written 2026-10-23 at the end of the session that
-added video upload (commit `919cc0f` on branch `video-upload`, worktree
+Status: steps 0–3 implemented in `fb30c42` on `main` (2026-10-23). Only one question is still
+open: whether HomeUI plays PNG files. Written 2026-10-23 at the end of the session that added
+video upload (commit `919cc0f` on branch `video-upload`, worktree
 `/home/shared/repos/rog-ryuo-lcd-video`). Measurements below are from that day, on firmware
 V1.0.10.
+
+## Outcome (2026-10-23, `fb30c42`)
+
+- **Code:** `ryuod.py` (`delete_media`, `check_delete`, `refresh_media`, `adb_sizes`, `Previews`,
+  `byte_range`, `Handler.send_file`), `ryuo_media.py` (`thumbnail`, `proxy`, `browser_plays`),
+  `web/index.html`. Tests: `tests/test_device_media.py` and `web/tests/media.test.js`.
+- **Endpoints:** `POST /api/media/delete {"names": [...]}`, `GET /api/media/thumb?name=`,
+  `GET /api/media/preview?name=` (single-range 206). `GET /api/media` now also returns
+  `sizes: {name: bytes}`.
+- **Decisions taken:**
+  - Delete is confirmed with a two-step button ("Delete" → "Really delete?", armed for 4 s);
+    there is no undo.
+  - The preview cache in `~/.cache/ryuo/preview/` is emptied at daemon startup and capped at
+    500 MB, removing the least recently used entries first.
+  - Thumb and preview requests whose `Sec-Fetch-Site` is another site get 403.
+- **Success criteria:**
+  - **1, 2, 4:** covered by tests.
+  - **3:** passed on the device. An HEVC test upload was deleted from the page, `adb ls` and
+    `/api/media` no longer listed it, and the playlist fell back to `RYUO_IV_HW_Info_01.mp4` with
+    `standby.mp4` count 0.
+  - **5:** passed in Chrome 156. The 2240×1080 HEVC file played as a 640×308 H.264 proxy,
+    seeking worked, and a Range request got `206`.
+  - **6:** tested only in part. During a 98 MB pull (2.5 s), the heartbeat age stayed at or below
+    916 ms and there was no standby. The proxy encode was not run during that pull, because the
+    98 MB file is H.264 and needs no proxy.
 
 ## The short version
 
@@ -66,10 +92,9 @@ system ffmpeg.
   checked with `P.fits("POST", "mediaDelete", body)` (`ryuo_proto.py:311`), the way
   `select_playlist` checks the playlist.
 
-## Design: proposed, not yet agreed with the user
+## Design, as proposed before implementation
 
-Open for the user to decide: confirmation style, and whether proxies are worth the disk space.
-Everything else follows from the constraints above.
+Implemented as written, plus the decisions listed under "Outcome" above.
 
 **Delete**
 - `POST /api/media/delete` with `{"names": [...]}`, JSON only. `do_DELETE` answers 405 on
@@ -211,11 +236,15 @@ systemctl --user start ryuod
 
 ## Open questions
 
-- **Delete confirmation:** a two-step button or an undo window? The user hasn't said. Undo would
-  mean deferring the actual delete.
-- **Proxy cache limit:** at ≈ 3 MB per 2 minutes it is small, but unbounded. Pick a cap, or clear
-  it at startup like `default_upload_dir()` is cleared.
-- **Does `conn` re-list `pcMedia` live after a delete?** Not tested. If it returns a stale list,
-  use `adb_media()` for the post-delete refresh.
 - **Does HomeUI play PNG files?** Not tested. It decides whether the PNG gets a "play" checkbox
-  or only a preview.
+  or only a preview. The PNG keeps the checkbox for now, as before.
+
+Answered on 2026-10-23:
+
+- **Delete confirmation:** a two-step button, no undo.
+- **Proxy cache limit:** emptied at startup and capped at 500 MB.
+- **Does `conn` re-list `pcMedia` live after a delete?** Yes. After HID `mediaDelete`, the next
+  `conn` reply no longer listed the file, and the adb fallback was not used. The code still runs
+  `adb rm` and `adb ls` when `conn` lists a deleted name.
+- **Does `adb shell ls -l` give sizes?** Yes. Toybox puts the size in field 5, and all four files
+  had the right size.
