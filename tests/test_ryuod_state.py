@@ -333,11 +333,6 @@ def test_check_color_rejects(v):
         ryuod.check_color(v, "titleColor")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG: COLOR_RE (ryuod.py:36) ends in '$', which also matches before a trailing newline, so "
-    "'#E5252B\\n' passes and reaches Color.parseColor on HomeUI's UI thread, which has no catch",
-)
 def test_check_color_rejects_trailing_newline():
     with pytest.raises(ryuod.Invalid):
         ryuod.check_color("#E5252B\n", "titleColor")

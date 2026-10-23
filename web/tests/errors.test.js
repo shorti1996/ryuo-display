@@ -127,11 +127,7 @@ describe("daemon down", () => {
     expect(option(slot(0), "CPU Temperature").textContent).toBe("CPU Temperature");
   });
 
-  // BUG: the catalog is fetched once at startup (index.html:395) and then only every 15 s
-  // (index.html:401). If the daemon was down at page load, fillSlotOptions runs with an empty
-  // catalog once the state arrives, so every saved item shows as "<item> (custom label)" and
-  // the slot selects offer nothing else for up to 15 s.
-  it.fails("labels the saved items normally as soon as the daemon answers", async () => {
+  it("labels the saved items normally as soon as the daemon answers", async () => {
     const d = makeDaemon();
     d.down = true;
     await openPage(d);
@@ -141,11 +137,7 @@ describe("daemon down", () => {
     expect(option(slot(4), "GPU Load")).toBeDefined();
   });
 
-  // BUG: the media list is fetched once at startup (index.html:397) and otherwise only by the
-  // Refresh button (index.html:387). If the daemon was down at page load, both groups say
-  // "none" for the life of the page, even after the state poll reconnects, and Play refuses
-  // with "pick at least one file".
-  it.fails("loads the media list once the daemon answers", async () => {
+  it("loads the media list once the daemon answers", async () => {
     const d = makeDaemon();
     d.down = true;
     await openPage(d);

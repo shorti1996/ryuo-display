@@ -100,7 +100,9 @@ class ReplyBuffer:
         self.buf = bytearray()
 
     def feed(self, report: bytes) -> list:
-        self.buf += report.rstrip(b"\x00")
+        # Kept whole: padding only follows a closing 0x5A, where the search for the next opener
+        # skips it, while stripping zeros per report would also drop a 0x00 crc at a report edge.
+        self.buf += report
         out = []
         while True:
             start = self.buf.find(0x5A)

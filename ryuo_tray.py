@@ -122,7 +122,8 @@ class Tray:
         elif not live:
             text = "ryuod running, cooler not connected"
         else:
-            text = f"{dev.get('product', 'RYUO IV')} · {dev.get('firmware', '')}"
+            # ryuod sends both keys as null until the cooler answers conn.
+            text = " · ".join(filter(None, [dev.get("product") or "RYUO IV", dev.get("firmware")]))
         self.status.setText(text)
         self.tray.setToolTip(f"RYUO LCD — {text}")
         self.tray.setIcon(self.icons["on" if live else "off"])

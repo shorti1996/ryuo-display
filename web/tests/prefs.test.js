@@ -70,10 +70,7 @@ describe("memory MHz", () => {
     expect($("result").style.color).toBe("var(--bad)");
   });
 
-  // BUG: index.html:195 picks the "how" text from applied/acked only. A prefs call that
-  // changes only memoryMHz sends nothing ("sent": [], applied true, acked false), so the
-  // page reads "Units: nothing sent — sent, no ack".
-  it.fails("does not claim a send when the daemon sent nothing", async () => {
+  it("does not claim a send when the daemon sent nothing", async () => {
     await openPage();
     $("memMHz").value = "6400";
     $("memMHz").dispatchEvent(new Event("change"));

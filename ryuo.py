@@ -80,6 +80,13 @@ def main():
         adb("push", a.file, MEDIA_DIR + os.path.basename(a.file))
         return
 
+    if a.cmd == "stop":
+        # Signal the driver before looking for the cooler, so this works while it is unplugged;
+        # the driver sends its own disconn on exit.
+        if not stop_player():
+            Ryuo(find_hidraw()).send("POST", "disconn")
+        return
+
     dev = Ryuo(find_hidraw())
     dev.verbose = a.verbose
     try:
@@ -97,9 +104,6 @@ def run(a, dev):
     elif a.cmd == "raw":
         dev.verbose = True
         dev.send(a.method, a.name, json.loads(a.json) if a.json else None)
-    elif a.cmd == "stop":
-        if not stop_player():
-            dev.send("POST", "disconn")
     elif a.cmd == "play":
         # Two drivers would interleave heartbeats and configs; the newest one wins.
         stop_player()

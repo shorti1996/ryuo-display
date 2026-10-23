@@ -361,11 +361,6 @@ def test_overlay_wide_label_ok_in_slot_one(api):
     assert status == 200
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG: COLOR_RE (ryuod.py:36) uses '$', so a colour with a trailing newline passes validation "
-    "and is sent in a preset; HomeUI's Color.parseColor would throw on its UI thread",
-)
 def test_overlay_colour_with_trailing_newline_rejected(api):
     status, _, _ = api.post("/api/overlay", {"titleColor": "#00FF00\n"})
     assert status == 400

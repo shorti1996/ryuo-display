@@ -282,11 +282,6 @@ def _frame_with_zero_crc_ending_at_report_edge():
     raise AssertionError("no such frame found")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG: ReplyBuffer.feed (ryuo_proto.py:103) rstrips 0x00 from every report, so a frame "
-    "split right after a 0x00 crc byte loses that byte and the reply is dropped",
-)
 def test_reply_buffer_keeps_zero_crc_at_report_boundary():
     text, frame = _frame_with_zero_crc_ending_at_report_edge()
     buf = P.ReplyBuffer()

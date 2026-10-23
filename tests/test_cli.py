@@ -204,16 +204,10 @@ def test_stop_without_driver_sends_disconn(cli):
 def test_stop_with_driver_signals_it(cli, spawn):
     p = spawn("ryuod")
     write_pid(p.pid)
-    dev = cli("stop")
-    assert dev.sent == []  # the driver sends its own disconn on exit
+    assert cli("stop") is None  # no device opened: the driver sends its own disconn on exit
     assert p.wait(3) < 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG: ryuo.py:83 opens the HID device before dispatching, so `ryuo.py stop` exits with "
-    "'HID interface not found' and leaves a running ryuod alone while the cooler is unplugged",
-)
 def test_stop_works_without_cooler(monkeypatch, spawn):
     monkeypatch.setattr(P, "find_hidraw", lambda: None)
     p = spawn("ryuod")

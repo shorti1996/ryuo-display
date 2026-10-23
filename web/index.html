@@ -179,6 +179,7 @@ const WEEKS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 const $ = (id) => document.getElementById(id);
 let catalog = [], config = null, mediaLists = { preset: [], custom: [] }, stats = {};
 let items = ["", "", "", "", "", ""];
+let unreachable = false;  // the state poll failed last time; fetches made meanwhile failed too
 
 async function api(path, body) {
   const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
@@ -189,12 +190,14 @@ async function api(path, body) {
   return j;
 }
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+// Sets the colour on every write, so a success after an error is not left in red.
+function say(text, bad) { $("result").textContent = text; $("result").style.color = bad ? "var(--bad)" : "var(--muted)"; }
 function showResult(j, what) {
-  if (j instanceof Error) { $("result").textContent = `${what}: ${j.message}`; $("result").style.color = "var(--bad)"; return; }
-  const sent = j.sent && j.sent.length ? j.sent.join(", ") : "nothing sent";
-  const how = j.applied === false ? "saved; the cooler is not connected, applied on reconnect" : (j.acked ? "acked by the cooler" : "sent, no ack");
-  $("result").style.color = "var(--muted)";
-  $("result").textContent = `${what}: ${sent} — ${how}${j.restartsVideo ? " (video restarted)" : ""}`;
+  if (j instanceof Error) { say(`${what}: ${j.message}`, true); return; }
+  const sent = (j.sent || []).join(", ");
+  const how = j.applied === false ? "saved; the cooler is not connected, applied on reconnect"
+    : !sent ? "saved" : (j.acked ? "acked by the cooler" : "sent, no ack");
+  say(`${what}: ${sent || "nothing sent"} — ${how}${j.restartsVideo ? " (video restarted)" : ""}`);
 }
 
 /* ---------- slots ---------- */
@@ -340,7 +343,7 @@ function renderMedia() {
   }
 }
 async function loadMedia(refresh) {
-  try { const j = await api("/api/media" + (refresh ? "?refresh=1" : "")); mediaLists = j; renderMedia(); if (refresh) $("result").textContent = `Media list from ${j.source}`; }
+  try { const j = await api("/api/media" + (refresh ? "?refresh=1" : "")); mediaLists = j; renderMedia(); if (refresh) say(`Media list from ${j.source}`); }
   catch (e) { showResult(e, "Media list"); }
 }
 async function play() {
@@ -355,6 +358,12 @@ function age(ms) { return ms == null ? "—" : (ms < 10000 ? (ms / 1000).toFixed
 async function pollState() {
   try {
     const j = await api("/api/state"), d = j.device;
+    if (unreachable) {
+      // The daemon is back: the catalog and media list fetched while it was down failed, and
+      // without them the saved items read "(custom label)" and the media groups stay empty.
+      unreachable = false;
+      await refreshCatalog(); loadMedia(false);
+    }
     $("dot").className = "dot " + (d.connected ? "ok" : "bad");
     $("conn").textContent = d.connected ? "connected" : "not connected";
     $("fw").textContent = d.firmware ? `${d.product} ${d.firmware} · ${d.hidraw}` : "";
@@ -364,6 +373,7 @@ async function pollState() {
     $("err").textContent = d.lastError && !d.connected ? d.lastError : "";
     if (!config) applyConfig(j.config);
   } catch (e) {
+    unreachable = true;
     $("dot").className = "dot bad"; $("conn").textContent = "daemon unreachable"; $("err").textContent = e.message;
   }
 }

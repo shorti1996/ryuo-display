@@ -33,8 +33,8 @@ INDEX = os.path.join(HERE, "web", "index.html")
 MAX_BODY = 16 * 1024
 MAX_MEDIA = 20
 LATE_ACK_S = 1.5   # a command's ack can queue behind HomeUI's slower POST all ack
-COLOR_RE = re.compile(r"^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
-SENSOR_RE = re.compile(r"^([A-Za-z0-9_.-]+):(temp[0-9]+)$")
+COLOR_RE = re.compile(r"#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})")
+SENSOR_RE = re.compile(r"([A-Za-z0-9_.-]+):(temp[0-9]+)")
 DEFAULT_ITEMS = ["CPU Temperature", "CPU Load", "GPU Temperature", "GPU Load", "Memory Utilization", "Date&Time"]
 DEFAULT_STATE = {
     "version": 1, "media": [], "playMode": "Single", "ratio": "2:1",
@@ -132,7 +132,7 @@ def clips_in(item):
 
 
 def check_color(v, key):
-    if not isinstance(v, str) or not COLOR_RE.match(v):
+    if not isinstance(v, str) or not COLOR_RE.fullmatch(v):
         raise Invalid(f"{key} must be #RRGGBB or #AARRGGBB")
     return v
 
@@ -302,7 +302,7 @@ def find_sensor(chips, candidates, kind="temp"):
 
 def sensor_override(chips, spec):
     """'<hwmon name>:tempN' -> (path, source) if it exists."""
-    m = SENSOR_RE.match(spec or "")
+    m = SENSOR_RE.fullmatch(spec or "")
     if not m:
         return None
     for name, d in chips:

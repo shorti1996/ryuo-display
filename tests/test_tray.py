@@ -142,11 +142,6 @@ def test_state_toggles_back_to_down(env, tray):
     assert tray.start.isVisible()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG: ryuo_tray.py:125 uses dev.get('product', 'RYUO IV'), but ryuod's status() always sends the "
-    "keys, with null before a conn reply, so the menu reads 'None · None'",
-)
 def test_connected_without_conn_reply_has_no_none_text(env, tray):
     env.state["value"] = {
         "ok": True,

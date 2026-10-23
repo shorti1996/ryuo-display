@@ -56,9 +56,7 @@ describe("media list", () => {
     expect(boxes().map((b) => b.value)).toEqual([...PRESET, ...CUSTOM]);
   });
 
-  // BUG: index.html:343 sets the success text but never resets $("result").style.color,
-  // which showResult(err) set to var(--bad); after any error, "Media list from conn" shows in red.
-  it.fails("shows a successful refresh in the normal colour after an earlier error", async () => {
+  it("shows a successful refresh in the normal colour after an earlier error", async () => {
     const d = await openPage();
     d.replyOnce("GET /api/media", { status: 504, body: { ok: false, error: "timeout" } });
     $("refresh").click();
