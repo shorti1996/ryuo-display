@@ -23,6 +23,7 @@ A Python 3 script (standard library only, about 170 lines) already does all of i
 | `ryuo.py push FILE` | `adb push` of a video into the cooler |
 | `ryuo.py play NAME… [--mode Single\|Cycle\|Random] [--brightness 0-100]` | selects the video, sets brightness, then sends a heartbeat every 1 s |
 | `ryuo.py brightness N` | sets backlight 0–100 |
+| `ryuo.py stop` | stops the running `play` (pidfile + SIGTERM); the cooler switches to standby at once |
 | `ryuo.py info` | handshake; the cooler replies with JSON including the list of media files stored on it |
 
 ## The constraint that shapes the design

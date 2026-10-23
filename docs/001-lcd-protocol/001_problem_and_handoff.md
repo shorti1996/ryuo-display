@@ -19,6 +19,10 @@ planned step is a background tray app; `docs/gui-research-brief.md` is the brief
 6. On reconnect the cooler restores the brightness it saved while in standby, 50/255, so the
    screen is dim. Sending `POST brightness {"value":100}` gives 250/255 (`settings get system
    screen_brightness`). `ryuo.py play` now does this itself.
+7. **After `POST disconn`, the device only leaves standby after a 5 s silence.** A new config
+   sent within 5 s plays behind the standby video (checked 2026-10-23: `standby.mp4` stayed open
+   in `dumpsys media.player`, no `hindStandby` in logcat). `POST power {"event":"resume"}` hides
+   standby unconditionally, so `ryuo.py play` sends it after the config.
 
 ## What is NOT wrong (checked, do not re-investigate)
 
@@ -86,7 +90,7 @@ ContentType=json\r\n
 | `POST brightness` ✔ | `{"value":0-100}` | backlight = value × 2.5 (0–250) |
 | `STATE all` ✔ | `PcInfo` JSON; `{"timestamp":<ms>}` is enough | heartbeat; feeds the sysinfo overlay |
 | `POST displayInSleep` | `{"enable":bool}` | standby video vs black on disconnect |
-| `POST power` | `{"event":"suspend"\|"shutdown"\|"lock-screen"\|"resume"\|"unlock-screen"}` | PC power-state hints |
+| `POST power` (`resume` ✔) | `{"event":"suspend"\|"shutdown"\|"lock-screen"\|"resume"\|"unlock-screen"}` | PC power-state hints; `resume` hides standby, restores brightness and re-applies the config |
 | `POST preset` | `ScreenConfig` | changes only the overlay and settings of the current config |
 | `POST sysinfoDisplay` | `{"items":[...]}` | overlay fields |
 | `POST temperature` | `{"value":"Celsius"\|"Fahrenheit"}` | unit |
@@ -94,7 +98,7 @@ ContentType=json\r\n
 | `POST rotate` | `{"degree":N}` | writes `persist.vendor.orientation` — persistent, untested |
 | `POST fanLCD` / `fanLCDSet`, `POST turboPump` | see `MsgReceiverManager` / `SerialMsgReceiverHandler` | pump fan and turbo; untested |
 | `POST mediaDelete` | `{"include":[names]}` or `{"exclude":[names]}` | deletes from `/sdcard/pcMedia/` |
-| `POST disconn` | — | goes to standby now |
+| `POST disconn` ✔ | — | standby video starts within ~0.1 s; see the re-entry trap in §short version, item 7 |
 | `POST upgrade`, `transport`/`transported` with `"type":"firmware"` | — | **OTA firmware update. Never send.** |
 
 ### ScreenConfig for full-screen playback
@@ -172,11 +176,13 @@ Ship #1 by itself first. Keep it separate from the GUI work.
 
 | path | why it matters |
 |---|---|
-| `ryuo.py:40` `encode`, `:50` `decode` | the frame codec |
-| `ryuo.py:64` `Ryuo.send` | header lines (≥2 required), report-ID prefix, 1024 limit |
-| `ryuo.py:89` `heartbeat` | must include `timestamp` (see clock trap) |
-| `ryuo.py:97` `media_config` | ScreenConfig builder |
-| `ryuo.py:161` | brightness after config; without it the screen stays at 50/255 |
+| `ryuo.py:43` `encode`, `:53` `decode` | the frame codec |
+| `ryuo.py:67` `Ryuo.send` | header lines (≥2 required), report-ID prefix, 1024 limit |
+| `ryuo.py:92` `heartbeat` | must include `timestamp` (see clock trap) |
+| `ryuo.py:124` `media_config` | ScreenConfig builder |
+| `ryuo.py:96` `running_player`, `:108` `stop_player` | pidfile handling for `stop` and player replacement |
+| `ryuo.py:195` | `power resume` after config; without it a quick re-`play` stays behind standby |
+| `ryuo.py:198` | brightness after config; without it the screen stays at 50/255 |
 | `70-rog-ryuo-iv.rules` | udev rule, installed in `/etc/udev/rules.d/` |
 | `docs/gui-research-brief.md` | brief for researching the tray app |
 | `re/apk/HomeUI.apk`, `re/apk/SerialService.apk` | pulled from `/system/app/HomeUI/` and `/system/priv-app/SerialService/` |
@@ -200,8 +206,11 @@ Ship #1 by itself first. Keep it separate from the GUI work.
 - The user must run anything that needs sudo (udev rules, system units).
 - Don't send `upgrade`, firmware `transport` or `rotate` without asking. The first two flash the
   device and `rotate` persists.
-- `ryuo.py play` blocks forever. Run it in the background and stop it to return to standby
-  (the screen switches about 5 s later).
+- `ryuo.py play` blocks until stopped. It writes `$XDG_RUNTIME_DIR/ryuo-play.pid`. `ryuo.py stop`
+  sends it SIGTERM, and on exit it sends `disconn`, so standby starts at once. A new `play` stops
+  the old one first.
+- `pgrep -f 'ryuo.py play'` also matches the Bash tool's own wrapper shell. Use
+  `cat $XDG_RUNTIME_DIR/ryuo-play.pid` or `dumpsys media.player` to check what is running.
 - Python stdout is buffered when not on a TTY. Use `python3 -u` to see `-v` output from a background run.
 
 ## Commands that establish state (all run on 2026-10-23)
@@ -219,6 +228,8 @@ adb shell ls -la /sdcard/pcMedia /sdcard/pcMediaPreset
 ./ryuo.py push some.mp4                          # lands in /sdcard/pcMedia/
 python3 -u ./ryuo.py -v play some.mp4            # keep running
 ./ryuo.py brightness 60                          # works from a second process while play runs
+./ryuo.py stop                                   # standby in ~0.5 s; also fine with no player
+adb shell dumpsys media.player | grep -c standby.mp4   # 2 = standby showing, 0 = user media
 
 # watch the device parse what you send; filter out the 50 ms idle noise
 adb logcat -c; ./ryuo.py -v info; adb logcat -d | grep -v 'read timeout\|select ret: 0\|sendStrTask' \
@@ -236,9 +247,11 @@ Traps:
 1. `./ryuo.py info` prints JSON containing `"product":"Ryuo IV Standard"`.
 2. `play <file>` shows the file on the panel (`adb exec-out screencap -p`) within 3 s.
 3. During play, `settings get system screen_brightness` returns `value × 2.5`.
-4. After stopping play, the panel shows the standby logo within ~6 s. The heartbeat is the only
-   thing keeping it alive.
-5. For the daemon: suspend/resume and `adb kill-server` don't stop playback, or it recovers
+4. `ryuo.py stop` puts the panel in standby within 1 s. Killing the player with SIGKILL gives
+   standby within ~6 s; the heartbeat is the only thing keeping playback alive.
+5. `play` started within 1 s of `stop`, or while another `play` runs, ends with
+   `dumpsys media.player | grep -c standby.mp4` = 0.
+6. For the daemon: suspend/resume and `adb kill-server` don't stop playback, or it recovers
    within 5 s.
 
 ## Open questions

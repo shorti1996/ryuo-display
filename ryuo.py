@@ -13,13 +13,15 @@ Payload: "<METHOD> <cmd> 1\r\nKey=Value\r\n...\r\n\r\n<json>". The device needs 
 least two header lines, or it NPEs reading SeqNumber.
 
 HomeUI drops back to the standby video if no command arrives for 5 s, so `play` keeps
-sending "STATE all" heartbeats until interrupted.
+sending "STATE all" heartbeats until stopped. `stop` signals that process through its
+pidfile; on exit it sends "disconn" so standby starts at once instead of 5 s later.
 """
 import argparse
 import glob
 import json
 import os
 import select
+import signal
 import subprocess
 import sys
 import time
@@ -27,6 +29,7 @@ import time
 VID_PID = "0003:00000B05:00001C76"
 REPORT_LEN = 1024
 MEDIA_DIR = "/sdcard/pcMedia/"
+PIDFILE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "ryuo-play.pid")
 
 
 def find_hidraw():
@@ -90,6 +93,30 @@ class Ryuo:
         self.send("STATE", "all", {"timestamp": int(time.time() * 1000)})
 
 
+def running_player():
+    """PID of a live `ryuo.py play`, or None. Ignores a stale pidfile."""
+    try:
+        with open(PIDFILE) as f:
+            pid = int(f.read())
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            cmdline = f.read()
+    except (OSError, ValueError):
+        return None
+    return pid if b"ryuo" in cmdline and b"play" in cmdline else None
+
+
+def stop_player(timeout=3.0):
+    """SIGTERM the running player and wait for it to exit. True if there was one."""
+    pid = running_player()
+    if pid is None:
+        return False
+    os.kill(pid, signal.SIGTERM)
+    end = time.monotonic() + timeout
+    while os.path.exists(f"/proc/{pid}") and time.monotonic() < end:
+        time.sleep(0.1)
+    return True
+
+
 def adb(*args):
     subprocess.run(["adb", *args], check=True)
 
@@ -127,6 +154,8 @@ def main():
                     help='overlay fields, e.g. "CPU Temperature" "Date&Time"')
     pl.add_argument("--brightness", type=int, default=100, help="0-100, default 100")
 
+    sub.add_parser("stop", help="stop a running `play` and switch the cooler to standby")
+
     br = sub.add_parser("brightness", help="set backlight, 0-100")
     br.add_argument("value", type=int)
 
@@ -152,20 +181,35 @@ def main():
     elif a.cmd == "raw":
         dev.verbose = True
         dev.send(a.method, a.name, json.loads(a.json) if a.json else None)
+    elif a.cmd == "stop":
+        if not stop_player():
+            dev.send("POST", "disconn")
     elif a.cmd == "play":
+        # Two players would interleave heartbeats and configs; the newest one wins.
+        stop_player()
         dev.send("POST", "conn", {"OS": "Linux"}, wait=1.5)
         dev.send("POST", "waterBlockScreen", {"enable": True})
         dev.send("POST", "waterBlockScreenId", media_config(a.names, a.mode, a.ratio, a.sysinfo))
+        # HomeUI only leaves standby on its own after a 5 s silence; a play started within 5 s
+        # of a "disconn" would stay behind the standby video. "resume" hides it unconditionally.
+        dev.send("POST", "power", {"event": "resume"})
         # On reconnect the cooler restores whatever brightness it had in standby (50/255),
         # so set it explicitly the way the Windows app does.
         dev.send("POST", "brightness", {"value": a.brightness})
-        print(f"playing {', '.join(a.names)}; Ctrl-C to stop (cooler returns to standby 5 s later)")
+        with open(PIDFILE, "w") as f:
+            f.write(str(os.getpid()))
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        print(f"playing {', '.join(a.names)}; stop with Ctrl-C or `ryuo.py stop`", flush=True)
         try:
             while True:
                 dev.heartbeat()
                 time.sleep(1)
         except KeyboardInterrupt:
             pass
+        finally:
+            dev.send("POST", "disconn")
+            if running_player() == os.getpid():
+                os.remove(PIDFILE)
 
 
 if __name__ == "__main__":
