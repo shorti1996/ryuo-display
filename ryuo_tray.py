@@ -4,7 +4,12 @@
 Talks only to ryuod's HTTP API on 127.0.0.1:8746, so it can be closed and reopened without
 touching the cooler. Needs python3-pyside6. The icon is red while ryuod drives the cooler,
 grey while ryuod is down or the cooler is missing.
+
+One tray per session: launching it again (e.g. from the start menu while the autostarted one
+runs) opens the control page instead. Start/Stop go through the ryuod.service user unit when
+it is installed, so systemd keeps tracking the daemon.
 """
+import fcntl
 import json
 import os
 import subprocess
@@ -14,13 +19,21 @@ import urllib.request
 import webbrowser
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QActionGroup, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 URL = "http://127.0.0.1:8746"
 BRIGHTNESS_STEPS = [25, 50, 75, 100]
-LOG = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "ryuod.log")
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+LOG = os.path.join(RUNTIME, "ryuod.log")
+LOCK = os.path.join(RUNTIME, "ryuo-tray.lock")
+UNIT = "ryuod.service"
+
+
+def have_unit():
+    return subprocess.run(["systemctl", "--user", "cat", UNIT],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
 def api(path, body=None):
@@ -122,18 +135,31 @@ class Tray:
                 a.setChecked(cfg.get("brightness") == v)
 
     def start_daemon(self):
-        # Own session, so quitting the tray leaves ryuod running.
-        with open(LOG, "a") as log:
-            subprocess.Popen([sys.executable, "-u", os.path.join(HERE, "ryuod.py")],
-                             stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+        if have_unit():
+            subprocess.run(["systemctl", "--user", "start", UNIT], check=False)
+        else:
+            # Own session, so quitting the tray leaves ryuod running.
+            with open(LOG, "a") as log:
+                subprocess.Popen([sys.executable, "-u", os.path.join(HERE, "ryuod.py")],
+                                 stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
         QTimer.singleShot(4000, self.refresh)
 
     def stop_daemon(self):
+        # ryuod exits 0 on SIGTERM, so the unit's Restart=on-failure leaves it stopped.
+        if have_unit():
+            subprocess.run(["systemctl", "--user", "stop", UNIT], check=False)
+        # Also covers a `ryuo.py play` or a hand-started ryuod holding the pidfile.
         subprocess.run([sys.executable, os.path.join(HERE, "ryuo.py"), "stop"], check=False)
         self.refresh()
 
 
 def main():
+    lock = open(LOCK, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        webbrowser.open(URL + "/")
+        return
     app = QApplication(sys.argv)
     app.setApplicationName("ryuo-tray")
     app.setDesktopFileName("ryuo-tray")
