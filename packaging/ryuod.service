@@ -1,0 +1,15 @@
+[Unit]
+Description=ROG RYUO IV pump LCD daemon (heartbeat, stats overlay, http://127.0.0.1:8746/)
+Documentation=file://@APPDIR@/docs/002-stats-prototype/spec.md
+
+[Service]
+# Headless: talks to /dev/hidraw* and adb only, so it starts with the user manager
+# rather than waiting for graphical-session.target like the tray does.
+ExecStart=/usr/bin/python3 -u @APPDIR@/ryuod.py
+# ryuod exits 0 on SIGTERM and when `ryuo.py play` takes the cooler over, so only a
+# crash or a port clash (exit 1) is retried.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

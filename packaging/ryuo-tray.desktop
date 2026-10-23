@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=RYUO LCD
+GenericName=Pump LCD control
+Comment=Tray icon and stats overlay for the ASUS ROG RYUO IV pump screen
+Exec=/usr/bin/python3 @APPDIR@/ryuo_tray.py
+Icon=@APPDIR@/ryuo-lcd.svg
+Terminal=false
+StartupNotify=false
+Categories=Utility;System;
+Keywords=ryuo;rog;asus;cooler;aio;pump;lcd;screen;stats;
+Actions=open;
+
+[Desktop Action open]
+Name=Open control page
+Exec=xdg-open http://127.0.0.1:8746/
