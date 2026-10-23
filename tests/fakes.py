@@ -1,9 +1,11 @@
-"""Test doubles for the HID side: a Ryuo on a socket instead of /dev/hidraw, and a fake cooler.
+"""Test doubles for the HID side: a Ryuo on a socket instead of /dev/hidraw, a fake cooler, and a
+ryuod.Device faked at submit() for the HTTP tests.
 
 A SOCK_SEQPACKET socketpair keeps report boundaries the way hidraw does: every os.write of
 1 + 1024 bytes arrives as one message, and every reply report is read back whole.
 """
 
+import concurrent.futures
 import contextlib
 import json
 import os
@@ -14,8 +16,46 @@ import time
 from unittest import mock
 
 import ryuo_proto as P
+import ryuod
 
 FAKE_PATH = "/fake/ryuo-hidraw"
+
+PRESET = ["RYUO_IV_HW_Info_01.mp4", "RYUO_IV_HW_Info_02.mp4", "RYUO_IV_HW_Info_04.mp4"]
+CUSTOM = ["2026-01-26_22-07-49-639.mp4", "2026-01-26_20-04-35-774.png"]
+
+
+class FakeDevice(ryuod.Device):
+    """ryuod.Device with the worker replaced at submit(): every call is recorded as
+    (method, cmd, body, wait) and its Future resolves at once. Call close_pipe() on teardown."""
+
+    def __init__(self, state, sampler):
+        super().__init__(state, sampler, "post")
+        self.media = {"source": "conn", "fetchedAt": 1792771200000, "preset": list(PRESET), "custom": list(CUSTOM)}
+        self.submitted = []
+        self.connected = True
+        self.result = {"applied": True, "acked": True}
+        self.conn_media = None  # media lists a refresh 'conn' would return; None = conn reply missing
+
+    def submit(self, method, cmd, body, wait=0.25):
+        if not self.connected:
+            return None
+        self.submitted.append((method, cmd, body, wait))
+        fut = concurrent.futures.Future()
+        res = dict(self.result)
+        if cmd == "conn":
+            res["media"] = self.conn_media is not None
+            if self.conn_media is not None:
+                self.set_media_from_conn({"media": self.conn_media})
+        fut.set_result(res)
+        return fut
+
+    @property
+    def sent(self):
+        return [(m, c, b) for m, c, b, _ in self.submitted]
+
+    def close_pipe(self):
+        os.close(self.wake_r)
+        os.close(self.wake_w)
 
 
 class SocketRyuo(P.Ryuo):

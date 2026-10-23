@@ -19,10 +19,22 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from ryuo_proto import (MEDIA_DIR, PIDFILE, REPORT_LEN, FrameTooLarge, Ryuo, decode, encode,  # noqa: F401,E402
-                        remove_pidfile, running_driver, screen_config, stop_driver, superseded,
-                        write_pidfile)
-import ryuo_proto  # noqa: E402
+import ryuo_proto
+from ryuo_proto import (  # noqa: F401
+    MEDIA_DIR,
+    PIDFILE,
+    REPORT_LEN,
+    FrameTooLarge,
+    Ryuo,
+    decode,
+    encode,
+    remove_pidfile,
+    running_driver,
+    screen_config,
+    stop_driver,
+    superseded,
+    write_pidfile,
+)
 
 running_player = running_driver
 stop_player = stop_driver

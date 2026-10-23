@@ -4,11 +4,14 @@
 Control page and JSON API on http://127.0.0.1:8746/. One device worker thread owns the
 hidraw fd: it runs the startup sequence, sends a PcInfo heartbeat every second (HomeUI
 drops to standby after 5 s of silence) and reconnects after USB loss, suspend, or a
-HomeUI restart. Settings persist in ~/.config/ryuo/state.json.
+HomeUI restart. Settings persist in ~/.config/ryuo/state.json. A video uploaded through the
+page is converted on an upload thread when the panel cannot play it as it is (ryuo_media.py),
+pushed with adb and played.
 """
 import argparse
 import collections
 import concurrent.futures
+import contextlib
 import copy
 import errno
 import glob
@@ -21,16 +24,22 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import urllib.parse
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
+import ryuo_media as M  # noqa: E402
 import ryuo_proto as P  # noqa: E402
 
 DEFAULT_PORT = 8746
 INDEX = os.path.join(HERE, "web", "index.html")
 MAX_BODY = 16 * 1024
+MAX_UPLOAD = 4 * 2**30      # bytes, for POST /api/media/upload
+UPLOAD_CHUNK = 2**20
+UPLOAD_IDLE_S = 60          # an upload that sends nothing for this long is dropped
 MAX_MEDIA = 20
 LATE_ACK_S = 1.5   # a command's ack can queue behind HomeUI's slower POST all ack
 COLOR_RE = re.compile(r"#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})")
@@ -181,10 +190,8 @@ class State:
             return
         except (OSError, ValueError) as e:
             log(f"state: {self.path} unreadable ({e}); moved to state.json.bad, using defaults")
-            try:
+            with contextlib.suppress(OSError):
                 os.replace(self.path, self.path + ".bad")
-            except OSError:
-                pass
             return
         self.fresh = False
         d = self.data
@@ -501,7 +508,7 @@ class Sampler(threading.Thread):
                         log(f"sampler: nvidia-smi failed 3 times ({type(e).__name__}); retrying every 30 s")
                 return
             self.nv_fail = 0
-            for item, raw in zip(("GPU Temperature", "GPU Load", "GPU Speed", "GPU Power"), fields):
+            for item, raw in zip(("GPU Temperature", "GPU Load", "GPU Speed", "GPU Power"), fields, strict=True):
                 try:
                     v[item] = float(raw)
                     src[item] = "nvidia-smi"
@@ -545,7 +552,7 @@ class Sampler(threading.Thread):
             out.append({"item": item, "title": item[len(P.FAN_PREFIX):], "unit": "RPM", "group": "Custom",
                         "available": item in sources, "source": sources.get(item), "note": note,
                         "clipsIn": clips_in(item)})
-        for item, _, source in getattr(self, "fans", []):
+        for item, _, _source in getattr(self, "fans", []):
             out.append({"item": item, "title": item[len(P.FAN_PREFIX):], "unit": "RPM", "group": "Custom",
                         "available": item in sources, "source": sources.get(item), "note": None,
                         "clipsIn": clips_in(item)})
@@ -563,7 +570,7 @@ def panel_text(item, value, temp_unit):
         return str(int(value * 1.8 + 32 if temp_unit == "Fahrenheit" else value))
     if item.endswith("Voltage"):
         return repr(round(value, 3))
-    return str(int(round(value)))
+    return str(round(value))
 
 
 # ---------------------------------------------------------------- device worker
@@ -652,16 +659,14 @@ class Device(threading.Thread):
                 self.tick()
             except OSError as e:
                 self.lost(e)
-            except Exception as e:  # noqa: BLE001 - a bug here must not end the heartbeat for good
+            except Exception as e:  # a bug here must not end the heartbeat for good
                 log(f"device: unexpected {type(e).__name__}: {e}; reconnecting")
                 self.lost(e)
                 self.stopping.wait(2)
         if self.dev is not None:
             if self.send_disconn:
-                try:
+                with contextlib.suppress(OSError):
                     self.call("POST", "disconn", None, wait=0.1)
-                except OSError:
-                    pass
             self.dev.close()
             self.dev = None
         self.fail_jobs()
@@ -687,7 +692,7 @@ class Device(threading.Thread):
             self.dev = dev
         try:
             self.startup()
-        except Exception as e:  # noqa: BLE001 - OSError is USB loss; anything else must not kill the thread
+        except Exception as e:  # OSError is USB loss; anything else must not kill the thread
             if not isinstance(e, OSError):
                 log(f"device: startup failed with {type(e).__name__}: {e}")
             self.lost(e)
@@ -727,7 +732,7 @@ class Device(threading.Thread):
     def startup(self):
         """§2.4: run on connect and on every recovery. Each step waits for its ack or 0.3 s."""
         self.ready = False
-        acked, body = self.call("POST", "conn", {"OS": "Linux"}, wait=1.5)
+        _acked, body = self.call("POST", "conn", {"OS": "Linux"}, wait=1.5)
         if body and "media" in body:
             self.set_media_from_conn(body)
         st = self.state.get()
@@ -820,10 +825,8 @@ class Device(threading.Thread):
             timeout = min(timeout, min(end for _, _, end in self.pending.values()) - time.monotonic())
         r, _, _ = select.select([self.dev.fd, self.wake_r], [], [], max(0.0, timeout))
         if self.wake_r in r:
-            try:
+            with contextlib.suppress(BlockingIOError):
                 os.read(self.wake_r, 4096)
-            except BlockingIOError:
-                pass
         if self.dev.fd in r:
             self.drain(0)
 
@@ -897,6 +900,134 @@ def adb_media():
     return {"source": "adb", "fetchedAt": int(time.time() * 1000), **lists}
 
 
+def select_playlist(d, media, mode):
+    """Validate a playlist against the device media list and save it. Returns (ScreenConfig, state)."""
+    st = d.state.get()
+    if not isinstance(media, list) or not 1 <= len(media) <= MAX_MEDIA or not all(isinstance(m, str) for m in media):
+        raise Invalid(f"media must be a list of 1-{MAX_MEDIA} file names")
+    known = set(d.device.media["preset"]) | set(d.device.media["custom"])
+    missing = [m for m in media if m not in known]
+    if missing:
+        raise Invalid(f"not in the device media list: {', '.join(missing)} (GET /api/media?refresh=1)")
+    if mode not in P.PLAY_MODES:
+        raise Invalid("playMode must be Single, Cycle or Random")  # anything else: black screen
+    cfg = P.screen_config(media, mode, st["ratio"], shown_items(st), overlay_settings(st))
+    # Measured at the largest SeqNumber the daemon will reach, so a playlist accepted now
+    # still fits after days of heartbeats; state is saved only once it passes.
+    if not P.fits("POST", "waterBlockScreenId", cfg):
+        raise Invalid("playlist too long for one HID report")
+    return cfg, d.state.update({"media": media, "playMode": mode})
+
+
+# ---------------------------------------------------------------- video upload
+
+def default_upload_dir():
+    # On disk under ~/.cache: /tmp is a RAM-backed tmpfs on Fedora, too small for large videos.
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "ryuo", "upload")
+
+
+class Upload(threading.Thread):
+    """One uploaded video on its way to the panel: received, probed, converted if the panel
+    cannot play it as it is, pushed with adb and played as a single looping clip.
+
+    Runs on its own thread, apart from the device worker; it only queues the final
+    waterBlockScreenId, so the heartbeat keeps going during a long transcode."""
+
+    def __init__(self, d, filename, fit, length):
+        super().__init__(daemon=True, name="upload")
+        self.d, self.fit, self.length = d, fit, length
+        self.lock = threading.Lock()
+        self.cancel_ = M.Cancel()
+        self.finished = False
+        self.dir = tempfile.mkdtemp(prefix="job-", dir=d.upload_dir)
+        ext = os.path.splitext(filename)[1].lower()
+        self.src = os.path.join(self.dir, "source" + (ext if re.fullmatch(r"\.[a-z0-9]{1,8}", ext) else ""))
+        self.status = {"state": "receiving", "file": os.path.basename(filename) or None, "bytes": length,
+                       "received": 0, "progress": 0.0, "speed": None, "action": None, "reason": None,
+                       "encoder": None, "name": None, "error": None, "applied": None, "acked": None,
+                       "startedAt": int(time.time() * 1000), "finishedAt": None}
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.status)
+
+    def set(self, **kw):
+        with self.lock:
+            self.status.update(kw)
+
+    def receive(self, rfile):
+        """Copy exactly `length` bytes of the request body to the source file, 1 MiB at a time."""
+        left = self.length
+        with open(self.src, "wb") as f:
+            while left > 0:
+                chunk = rfile.read(min(UPLOAD_CHUNK, left))
+                if not chunk:
+                    raise Invalid(f"connection closed after {self.length - left} of {self.length} bytes")
+                if self.cancel_.is_set():
+                    raise Invalid("cancelled")
+                f.write(chunk)
+                left -= len(chunk)
+                self.set(received=self.length - left, progress=(self.length - left) / self.length)
+
+    def cancel(self):
+        self.cancel_.cancel()
+
+    def fail(self, msg, state="error"):
+        self.set(state=state, error=msg if state == "error" else None, progress=None, speed=None,
+                 finishedAt=int(time.time() * 1000))
+        shutil.rmtree(self.dir, ignore_errors=True)
+        self.finished = True
+
+    def run(self):
+        try:
+            self.process()
+        except M.Cancelled:
+            self.fail(None, "cancelled")
+        except (M.MediaError, Invalid) as e:
+            # ffprobe and ffmpeg name the job's temp file; show the name the user picked instead.
+            self.fail(str(e).replace(self.src, self.status["file"] or "the file"))
+        except Exception as e:  # shown in the UI; otherwise the job would read "running" forever
+            log(f"upload: unexpected {type(e).__name__}: {e}")
+            self.fail(f"{type(e).__name__}: {e}")
+        else:
+            self.set(finishedAt=int(time.time() * 1000))
+            shutil.rmtree(self.dir, ignore_errors=True)
+            self.finished = True
+
+    def process(self):
+        self.set(state="probing", progress=None)
+        t = M.tools()
+        info = M.inspect(self.src, t)
+        action, reason = M.plan(info)
+        self.set(action=action, reason=reason, encoder=t.encoder if action == "transcode" else None)
+        log(f"upload: {self.status['file']}: {action} ({reason})")
+        out = self.src
+        if action != "copy":
+            out = os.path.join(self.dir, "panel.mp4")
+            self.set(state="converting", progress=0.0 if info["duration"] else None)
+            M.convert(self.src, out, info, action, self.fit, t,
+                      lambda done, speed: self.set(progress=done, speed=speed), self.cancel_)
+        if self.cancel_.is_set():
+            raise M.Cancelled()
+        name = M.device_name(self.status["file"])
+        self.set(state="pushing", progress=None, speed=None, name=name)
+        M.push(out, name, P.MEDIA_DIR, self.cancel_)
+        dev = self.d.device
+        dev.media = {**dev.media, "custom": [*dev.media["custom"], name]}
+        self.set(state="starting")
+        cfg, _ = select_playlist(self.d, [name], "Single")
+        fut = dev.submit("POST", "waterBlockScreenId", cfg, 1.0)
+        res = {"applied": False, "acked": False}  # saved; the startup sequence sends it on reconnect
+        if fut is not None:
+            try:
+                res = fut.result(3)
+            except concurrent.futures.TimeoutError:
+                res = {"applied": True, "acked": False}
+        self.set(state="done", applied=res.get("applied"), acked=res.get("acked"))
+        log(f"upload: playing {name}")
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "ryuod"
     protocol_version = "HTTP/1.1"
@@ -959,9 +1090,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.host_ok():
             return
-        path = self.path.partition("?")[0]
+        path, _, query = self.path.partition("?")
+        if path == "/api/media/upload":
+            return self.post_upload(query)  # a raw file body, too large for the JSON path below
         route = {"/api/overlay": self.post_overlay, "/api/brightness": self.post_brightness,
-                 "/api/media/select": self.post_media_select, "/api/prefs": self.post_prefs}.get(path)
+                 "/api/media/select": self.post_media_select, "/api/prefs": self.post_prefs,
+                 "/api/media/upload/cancel": self.post_upload_cancel}.get(path)
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -995,8 +1129,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         dev = self.d.device
         self.reply(200, {"ok": True, "device": dev.status(), "config": public_config(st),
                          "limits": {"slots": P.SLOTS, "brightnessMax": P.BRIGHTNESS_MAX,
-                                    "frameMax": P.REPORT_LEN, "lastHeartbeatBytes": dev.last_hb_bytes},
-                         "media": {k: dev.media[k] for k in ("preset", "custom")}})
+                                    "frameMax": P.REPORT_LEN, "lastHeartbeatBytes": dev.last_hb_bytes,
+                                    "uploadMax": MAX_UPLOAD},
+                         "media": {k: dev.media[k] for k in ("preset", "custom")},
+                         "upload": self.d.upload.snapshot() if self.d.upload else None})
 
     def get_stats(self, _q):
         st = self.d.state.get()
@@ -1023,10 +1159,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             fut = dev.submit("POST", "conn", {"OS": "Linux"}, wait=1.5)
             got = False
             if fut is not None:
-                try:
+                with contextlib.suppress(concurrent.futures.TimeoutError):
                     got = fut.result(3).get("media", False)
-                except concurrent.futures.TimeoutError:
-                    pass
             if not got:
                 fallback = adb_media()
                 if fallback is None:
@@ -1080,28 +1214,68 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              "deviceLevel": min(255, int(value * 2.5))})
 
     def post_media_select(self, body):
-        st = self.d.state.get()
         media = body.get("media")
-        mode = body.get("playMode", st["playMode"])
-        if not isinstance(media, list) or not 1 <= len(media) <= MAX_MEDIA or not all(isinstance(m, str) for m in media):
-            raise Invalid(f"media must be a list of 1-{MAX_MEDIA} file names")
-        known = set(self.d.device.media["preset"]) | set(self.d.device.media["custom"])
-        missing = [m for m in media if m not in known]
-        if missing:
-            raise Invalid(f"not in the device media list: {', '.join(missing)} (GET /api/media?refresh=1)")
-        if mode not in P.PLAY_MODES:
-            raise Invalid("playMode must be Single, Cycle or Random")  # anything else: black screen
-        cfg = P.screen_config(media, mode, st["ratio"], shown_items(st), overlay_settings(st))
-        # Measured at the largest SeqNumber the daemon will reach, so a playlist accepted now
-        # still fits after days of heartbeats; state is saved only once it passes.
-        if not P.fits("POST", "waterBlockScreenId", cfg):
-            raise Invalid("playlist too long for one HID report")
-        st = self.d.state.update({"media": media, "playMode": mode})
+        mode = body.get("playMode", self.d.state.get()["playMode"])
+        cfg, st = select_playlist(self.d, media, mode)
         # The ack follows HomeUI's config handling and lands after the usual 250 ms window.
         res = self.apply("POST", "waterBlockScreenId", cfg, wait=1.0)
         if res is not None:
             self.reply(200, {"ok": True, **res, "sent": ["POST waterBlockScreenId"], "restartsVideo": True,
                              "config": public_config(st)})
+
+    def post_upload(self, query):
+        """Stream the body to a file under the cache dir, then probe, convert, push and play it
+        on a job thread. Answers 202 once the file is received; GET /api/state reports the job."""
+        # application/octet-stream and X-Filename both need a CORS preflight, which OPTIONS
+        # refuses, so other web pages cannot upload either.
+        ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        params = urllib.parse.parse_qs(query)
+        fit = params.get("fit", ["crop"])[0]
+        filename = urllib.parse.unquote(self.headers.get("X-Filename", ""))
+        # The body stays unread on every refusal below, so the connection cannot be reused.
+        self.close_connection = True
+        if ctype != "application/octet-stream":
+            return self.error(415, "Content-Type must be application/octet-stream")
+        if length <= 0:
+            return self.error(411, "Content-Length required")
+        if length > MAX_UPLOAD:
+            return self.error(413, f"file over {MAX_UPLOAD // 2**30} GiB")
+        if fit not in M.FITS:
+            return self.error(400, "fit must be crop or pad")
+        d = self.d
+        with d.upload_lock:
+            if d.upload is not None and not d.upload.finished:
+                return self.error(409, "another video is still being processed")
+            os.makedirs(d.upload_dir, exist_ok=True)
+            # The source and the converted copy can each be about the size of the upload.
+            if shutil.disk_usage(d.upload_dir).free < 2 * length + 256 * 2**20:
+                return self.error(507, f"not enough free space in {d.upload_dir}")
+            job = d.upload = Upload(d, filename, fit, length)
+        try:
+            self.connection.settimeout(UPLOAD_IDLE_S)
+            job.receive(self.rfile)
+        except (OSError, Invalid) as e:
+            if job.cancel_.is_set():
+                job.fail(None, "cancelled")
+                return self.error(400, "upload cancelled")
+            job.fail(f"upload stopped: {e}")
+            return self.error(400, f"upload stopped: {e}")
+        finally:
+            self.connection.settimeout(None)
+        self.close_connection = False
+        job.start()
+        self.reply(202, {"ok": True, "upload": job.snapshot()})
+
+    def post_upload_cancel(self, _body):
+        job = self.d.upload
+        if job is None or job.finished:
+            return self.error(409, "no upload in progress")
+        job.cancel()
+        self.reply(200, {"ok": True, "upload": job.snapshot()})
 
     def post_prefs(self, body):
         st = self.d.state.get()
@@ -1134,7 +1308,9 @@ class Server(http.server.ThreadingHTTPServer):
 
 
 class Daemon:
-    pass
+    upload = None               # the current or last Upload
+    upload_lock = threading.Lock()
+    upload_dir = default_upload_dir()
 
 
 def is_ryuod(pid):
@@ -1184,6 +1360,8 @@ def main():
         log("stopped the previous driver")
     P.write_pidfile()
     d = Daemon()
+    # Jobs left behind by a daemon that was killed mid-upload.
+    shutil.rmtree(d.upload_dir, ignore_errors=True)
     d.state = State(a.state)
     httpd.daemon_ref = d
     d.sampler = Sampler(d.state)

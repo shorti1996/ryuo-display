@@ -5,46 +5,15 @@ returns a Future (or None while the cooler is disconnected). FakeDevice records 
 resolves the Future at once, so the tests see exactly what would have gone to the cooler.
 """
 
-import concurrent.futures
 import http.client
 import json
-import os
 import threading
 
 import pytest
+from fakes import CUSTOM, PRESET, FakeDevice
 
 import ryuo_proto as P
 import ryuod
-
-PRESET = ["RYUO_IV_HW_Info_01.mp4", "RYUO_IV_HW_Info_02.mp4", "RYUO_IV_HW_Info_04.mp4"]
-CUSTOM = ["2026-01-26_22-07-49-639.mp4", "2026-01-26_20-04-35-774.png"]
-
-
-class FakeDevice(ryuod.Device):
-    def __init__(self, state, sampler):
-        super().__init__(state, sampler, "post")
-        self.media = {"source": "conn", "fetchedAt": 1792771200000, "preset": list(PRESET), "custom": list(CUSTOM)}
-        self.submitted = []
-        self.connected = True
-        self.result = {"applied": True, "acked": True}
-        self.conn_media = None  # media lists a refresh 'conn' would return; None = conn reply missing
-
-    def submit(self, method, cmd, body, wait=0.25):
-        if not self.connected:
-            return None
-        self.submitted.append((method, cmd, body, wait))
-        fut = concurrent.futures.Future()
-        res = dict(self.result)
-        if cmd == "conn":
-            res["media"] = self.conn_media is not None
-            if self.conn_media is not None:
-                self.set_media_from_conn({"media": self.conn_media})
-        fut.set_result(res)
-        return fut
-
-    def close_pipe(self):
-        os.close(self.wake_r)
-        os.close(self.wake_w)
 
 
 class Api:
@@ -77,7 +46,7 @@ class Api:
 
     @property
     def sent(self):
-        return [(m, c, b) for m, c, b, _ in self.d.device.submitted]
+        return self.d.device.sent
 
     def disk_state(self):
         with open(self.d.state.path) as f:
@@ -120,7 +89,13 @@ def test_get_state(api):
     assert body["ok"] is True
     assert body["config"] == ryuod.public_config(api.d.state.get())
     assert body["config"]["media"] == ["RYUO_IV_HW_Info_04.mp4"]
-    assert body["limits"] == {"slots": 6, "brightnessMax": 102, "frameMax": 1024, "lastHeartbeatBytes": None}
+    assert body["limits"] == {
+        "slots": 6,
+        "brightnessMax": 102,
+        "frameMax": 1024,
+        "lastHeartbeatBytes": None,
+        "uploadMax": ryuod.MAX_UPLOAD,
+    }
     assert body["media"] == {"preset": PRESET, "custom": CUSTOM}
     dev = body["device"]
     assert dev["connected"] is False  # no fd in the fake

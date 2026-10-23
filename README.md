@@ -182,6 +182,7 @@ done.
 |---|---|
 | `ryuo_proto.py` | frame codec, HID device class, message builders, pidfile helpers; shared by the daemon and the CLI |
 | `ryuod.py` | the daemon: device worker, stats sampler, HTTP server and JSON API |
+| `ryuo_media.py` | video uploads for the daemon: ffprobe check, transcode to HEVC when the panel can't decode the file, adb push |
 | `ryuo.py` | the CLI |
 | `ryuo_tray.py` | the tray icon; talks only to the daemon's HTTP API |
 | `web/` | the control page (`index.html`, plain JavaScript, no external requests) and its tests |

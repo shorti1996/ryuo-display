@@ -7,6 +7,7 @@ Frame: 0x5A | escape(len_be16 + payload + crc8) | 0x5A
 Payload: "<METHOD> <cmd> 1\r\nKey=Value\r\n...\r\n\r\n<json>". The device needs at
 least two header lines, or it NPEs reading SeqNumber. Replies: "1 200\r\nAckNumber=N...".
 """
+import contextlib
 import glob
 import json
 import os
@@ -206,10 +207,8 @@ class Ryuo:
         self.send("STATE", "all", {"timestamp": int(time.time() * 1000)})
 
     def close(self):
-        try:
+        with contextlib.suppress(OSError):
             os.close(self.fd)
-        except OSError:
-            pass
 
 
 def is_driver_argv(argv, daemon_only=False):
@@ -363,7 +362,7 @@ def pc_info(snapshot, items, now_ms):
     """
     def i(item):
         v = snapshot.get(item)
-        return int(round(v)) if isinstance(v, (int, float)) else 0
+        return round(v) if isinstance(v, (int, float)) else 0
 
     def f(item, nd):
         v = snapshot.get(item)
