@@ -1139,8 +1139,7 @@ class Daemon:
 
 def is_ryuod(pid):
     try:
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            return b"ryuod" in f.read()
+        return P.is_driver_argv(P.proc_argv(pid), daemon_only=True)
     except OSError:
         return False
 

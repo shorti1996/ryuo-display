@@ -48,7 +48,14 @@ def test_port_8746_is_refused(violations):
 
 @pytest.mark.parametrize(
     "argv",
-    [["systemctl", "--user", "stop", "ryuod.service"], ["adb", "devices"], [sys.executable, "/x/ryuod.py"]],
+    [
+        ["systemctl", "--user", "stop", "ryuod.service"],
+        ["adb", "devices"],
+        [sys.executable, "/x/ryuod.py"],
+        [sys.executable, "-u", "/x/ryuod.py", "-v"],
+        [sys.executable, "-c", "import runpy; runpy.run_path('ryuod.py')"],
+        [sys.executable, "-m", "pytest", "ryuo.py"],
+    ],
 )
 def test_forbidden_subprocesses_are_refused(violations, argv):
     with pytest.raises(SafetyViolation):

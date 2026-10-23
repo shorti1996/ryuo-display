@@ -212,18 +212,52 @@ class Ryuo:
             pass
 
 
+def is_driver_argv(argv, daemon_only=False):
+    """True for ryuod (`…/ryuod.py`) or, unless daemon_only, `…/ryuo.py [opts] play …`.
+
+    Exact script names, not substrings: every path in this checkout contains "ryuo", so a
+    substring test would match any process started from here."""
+    for i, arg in enumerate(argv):
+        name = os.path.basename(arg)
+        if name == b"ryuod.py":
+            return True
+        if name == b"ryuo.py":
+            return not daemon_only and b"play" in argv[i + 1:]
+    return False
+
+
+def proc_argv(pid):
+    with open(f"/proc/{pid}/cmdline", "rb") as f:
+        return f.read().rstrip(b"\0").split(b"\0")
+
+
+def proc_started_at(pid):
+    """Wall-clock start time of pid, rounded down to the second the kernel's btime has."""
+    with open(f"/proc/{pid}/stat", "rb") as f:
+        stat = f.read()
+    ticks = int(stat[stat.rindex(b")") + 2:].split()[19])  # field 22, starttime
+    with open("/proc/stat") as f:
+        btime = next(int(line.split()[1]) for line in f if line.startswith("btime "))
+    return btime + ticks / os.sysconf("SC_CLK_TCK")
+
+
 def running_driver():
     """PID of a live `ryuo.py play` or ryuod, or None. Ignores a stale pidfile."""
     try:
         with open(PIDFILE) as f:
             pid = int(f.read())
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            cmdline = f.read()
-    except (OSError, ValueError):
+        written = os.stat(PIDFILE).st_mtime
+        argv = proc_argv(pid)
+        started = proc_started_at(pid)
+    except (OSError, ValueError, IndexError, StopIteration):
         return None
     if pid == os.getpid():
         return None
-    return pid if b"ryuod" in cmdline or (b"ryuo" in cmdline and b"play" in cmdline) else None
+    # A driver writes the pidfile after it starts. A process that started later got a reused pid
+    # from a stale file; 1 s of slack covers btime's whole-second resolution.
+    if started > written + 1:
+        return None
+    return pid if is_driver_argv(argv) else None
 
 
 def stop_driver(timeout=3.0):

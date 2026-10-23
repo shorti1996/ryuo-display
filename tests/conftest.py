@@ -172,7 +172,11 @@ def _safety(monkeypatch, tmp_path):
                 argv = " ".join(argv).split()
             if argv and os.path.basename(argv[0]) in FORBIDDEN_PROGRAMS:
                 _violate(f"subprocess {argv!r}: adb and systemctl are off limits in tests")
-            if any(x.endswith(FORBIDDEN_SCRIPTS) for x in argv):
+            # `python -c CODE word…` runs only CODE; the words are its argv, which is how the
+            # pidfile tests make fake drivers named ryuod.py / ryuo.py. Anything else is checked whole.
+            run = argv[:1] if argv[1:2] == ["-c"] else argv
+            code = argv[2] if argv[1:2] == ["-c"] and len(argv) > 2 else ""
+            if any(x.endswith(FORBIDDEN_SCRIPTS) for x in run) or any(s in code for s in FORBIDDEN_SCRIPTS):
                 _violate(f"subprocess {argv!r}: never start the project's scripts for real")
             super().__init__(args, *a, **kw)
 

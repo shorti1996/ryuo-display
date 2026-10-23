@@ -202,7 +202,7 @@ def test_stop_without_driver_sends_disconn(cli):
 
 
 def test_stop_with_driver_signals_it(cli, spawn):
-    p = spawn("ryuod")
+    p = spawn("ryuod.py")
     write_pid(p.pid)
     assert cli("stop") is None  # no device opened: the driver sends its own disconn on exit
     assert p.wait(3) < 0
@@ -210,7 +210,7 @@ def test_stop_with_driver_signals_it(cli, spawn):
 
 def test_stop_works_without_cooler(monkeypatch, spawn):
     monkeypatch.setattr(P, "find_hidraw", lambda: None)
-    p = spawn("ryuod")
+    p = spawn("ryuod.py")
     write_pid(p.pid)
     monkeypatch.setattr(sys, "argv", ["ryuo.py", "stop"])
     with contextlib.suppress(SystemExit):
@@ -287,7 +287,7 @@ def test_play_sigterm_handler_exits_cleanly(cli, monkeypatch):
 
 
 def test_play_stops_previous_driver_first(cli, monkeypatch, spawn):
-    p = spawn("ryuo", "play")
+    p = spawn("ryuo.py", "play")
     write_pid(p.pid)
     monkeypatch.setattr(ryuo, "superseded", lambda: True)
     dev = cli("play", "a.mp4")
@@ -388,7 +388,7 @@ def test_ryuod_main_sigterm_sends_disconn(daemon_main, monkeypatch):
 
 
 def test_ryuod_main_takeover_skips_disconn(daemon_main, monkeypatch, spawn):
-    p = spawn("ryuo", "play")
+    p = spawn("ryuo.py", "play")
     monkeypatch.setattr(P, "superseded", lambda: True)
     monkeypatch.setattr(P, "running_driver", lambda: p.pid)
     ryuod.main()
@@ -425,6 +425,6 @@ def test_bind_port_taken_by_other_process_exits(monkeypatch):
 
 
 def test_is_ryuod(spawn):
-    assert ryuod.is_ryuod(spawn("ryuod").pid)
-    assert not ryuod.is_ryuod(spawn("ryuo", "play").pid)
+    assert ryuod.is_ryuod(spawn("ryuod.py").pid)
+    assert not ryuod.is_ryuod(spawn("ryuo.py", "play").pid)
     assert not ryuod.is_ryuod(2**22 + 12345)

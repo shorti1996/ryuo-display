@@ -221,7 +221,10 @@ def test_running_driver_no_pidfile():
     assert P.stop_driver() is False
 
 
-@pytest.mark.parametrize("words", [("ryuo", "play"), ("ryuod",), ("--from", "ryuod-test")])
+@pytest.mark.parametrize(
+    "words",
+    [("ryuo.py", "play"), ("./ryuo.py", "-v", "play", "a.mp4"), ("ryuod.py",), ("/opt/x/ryuod.py", "-v")],
+)
 def test_running_driver_matches_driver_cmdlines(spawn, words):
     p = spawn(*words)
     write_pid(p.pid)
@@ -229,7 +232,22 @@ def test_running_driver_matches_driver_cmdlines(spawn, words):
     assert P.superseded()
 
 
-@pytest.mark.parametrize("words", [("ryuo",), ("play",), ("something", "else")])
+@pytest.mark.parametrize(
+    "words",
+    [
+        ("ryuo",),
+        ("play",),
+        ("something", "else"),
+        # substrings of the script names, which the old check matched
+        ("ryuod",),
+        ("--from", "ryuod-test"),
+        ("ryuo", "play"),
+        ("/home/shared/repos/rog-ryuo-lcd/.venv/bin/tool", "play"),
+        # ryuo.py without play is a one-shot command, not a driver
+        ("ryuo.py", "info"),
+        ("play", "ryuo.py"),
+    ],
+)
 def test_running_driver_ignores_unrelated_process(spawn, words):
     # A stale pidfile whose pid was reused by an unrelated process must not be signalled.
     p = spawn(*words)
@@ -239,8 +257,27 @@ def test_running_driver_ignores_unrelated_process(spawn, words):
     assert p.poll() is None
 
 
+def test_running_driver_ignores_pid_reused_after_pidfile_written(spawn):
+    # A pidfile left behind by a dead driver, whose pid now belongs to a newer driver-looking
+    # process: the process started after the file was written, so it is not the writer.
+    p = spawn("ryuod.py")
+    write_pid(p.pid)
+    old = P.proc_started_at(p.pid) - 60
+    os.utime(P.PIDFILE, (old, old))
+    assert P.running_driver() is None
+    assert P.stop_driver() is False
+    assert p.poll() is None
+
+
+def test_running_driver_accepts_pidfile_written_after_start(spawn):
+    p = spawn("ryuod.py")
+    write_pid(p.pid)
+    assert P.proc_started_at(p.pid) <= os.stat(P.PIDFILE).st_mtime + 1
+    assert P.running_driver() == p.pid
+
+
 def test_running_driver_ignores_dead_pid(spawn):
-    p = spawn("ryuo", "play")
+    p = spawn("ryuo.py", "play")
     p.kill()
     p.wait(5)
     write_pid(p.pid)
@@ -261,7 +298,7 @@ def test_running_driver_ignores_own_pid():
 
 
 def test_stop_driver_terminates_and_waits(spawn):
-    p = spawn("ryuo", "play")
+    p = spawn("ryuo.py", "play")
     write_pid(p.pid)
     t0 = time.monotonic()
     assert P.stop_driver(timeout=3.0) is True
@@ -277,7 +314,7 @@ def test_stop_driver_gives_up_after_timeout(spawn):
             PYTHON,
             "-c",
             "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print(1, flush=True); time.sleep(30)",
-            "ryuod",
+            "ryuod.py",
         ],
         stdout=subprocess.PIPE,
     )
@@ -304,7 +341,7 @@ def test_write_and_remove_pidfile():
 
 
 def test_remove_pidfile_keeps_another_drivers_pid(spawn):
-    p = spawn("ryuod")
+    p = spawn("ryuod.py")
     write_pid(p.pid)
     P.remove_pidfile()
     assert os.path.exists(P.PIDFILE)
@@ -315,6 +352,6 @@ def test_remove_pidfile_keeps_another_drivers_pid(spawn):
 def test_superseded_after_takeover(spawn):
     P.write_pidfile()
     assert not P.superseded()
-    p = spawn("ryuo", "play")
+    p = spawn("ryuo.py", "play")
     write_pid(p.pid)
     assert P.superseded()
