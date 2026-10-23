@@ -1,6 +1,7 @@
 # Live PC stats on the RYUO IV LCD: localhost prototype spec
 
-Status: build spec, written 2026-10-23. Nothing in it is implemented yet.
+Status: build spec, written 2026-10-23 and implemented the same day as `ryuo_proto.py`, `ryuod.py`
+and `web/index.html`. The test suites in `tests/` and `web/tests/` pin its behaviour.
 
 Sources, in order of trust:
 
