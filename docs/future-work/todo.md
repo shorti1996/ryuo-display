@@ -1,3 +1,4 @@
 # Future work
 
 - **Second display: occasional stutter on a window or on pointer movement.** Since 9db04ef the mode works well in daily use, but now and then a window or the pointer stutters on the panel for a moment. Each capture restart (logged as `restarted the capture` in `journalctl --user -u ryuod`) freezes the panel for about 80 ms and starts a fresh keyframe, so the first check is whether the stutters line up with those log lines.
+- **Second display: anti burn-in protection.** The panel is OLED, and in display mode it can show the same windows for hours, while the receiver's layer covers the firmware's own protection (HomeUI's screensaver clip every 5 minutes). Options to weigh: shift the picture by a few pixels every few minutes, dim it after a period with no new frames, or hide the layer and let HomeUI's video play when the desktop has not changed for a while.
