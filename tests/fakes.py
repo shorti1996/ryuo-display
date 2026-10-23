@@ -11,6 +11,8 @@ import json
 import os
 import select
 import socket
+import sys
+import textwrap
 import threading
 import time
 from unittest import mock
@@ -235,3 +237,118 @@ def hid_pair():
 def close_fd(fd):
     with contextlib.suppress(OSError):
         os.close(fd)
+
+
+# ---------------------------------------------------------------- second display
+
+FAKE_DISPLAY = textwrap.dedent(
+    """\
+    import os, signal, sys, time
+    here = sys.argv[1]
+    def note(text):
+        with open(os.path.join(here, "events"), "a") as f:
+            f.write(text + "\\n")
+    mode = open(os.path.join(here, "mode")).read().split()
+    note("start " + os.environ.get("WAYLAND_DISPLAY", "-"))
+    def term(*_):
+        note("sigterm")
+        if "ignore-term" in mode:
+            return
+        print("stopping", flush=True)
+        time.sleep(float(os.environ.get("FAKE_TEARDOWN_S", "0.05")))
+        print("virtual monitor Virtual-RYUO removed", flush=True)
+        note("clean exit")
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, term)
+    if "missing" in mode:
+        sys.exit("missing programs: krfb-virtualmonitor")
+    if "usage" in mode:
+        print("usage: ryuo_display.py [-h]", file=sys.stderr, flush=True)
+        sys.exit(2)
+    if "nocooler" in mode:
+        print("error: no cooler on adb (`adb devices` lists none, or more than one: pass --serial)", flush=True)
+        sys.exit(1)
+    if "fail" in mode:
+        print("error: krfb-virtualmonitor exited (status 1) before PipeWire stream for Virtual-RYUO:", flush=True)
+        print("  qt.qpa.wayland: could not connect to display", flush=True)
+        sys.exit(1)
+    print("virtual monitor Virtual-RYUO is up, 2240x1080 at 60 Hz", flush=True)
+    if "nopointer" in mode:
+        print("pointer: not shown: screen selection was cancelled", flush=True)
+    else:
+        print("pointer: shown", flush=True)
+    time.sleep(0.3)
+    print("streaming to the panel at 10 Mb/s; stop with Ctrl-C", flush=True)
+    n = 0
+    while True:
+        time.sleep(0.05)
+        n += 1
+        print("sent 59.8 fps, 9.7 Mb/s", flush=True)
+        print("ryuo-display: 59.6 fps", flush=True)
+        if "die" in mode and n == 3:
+            print("error: stream to the panel failed: [Errno 32] Broken pipe", flush=True)
+            sys.exit(1)
+    """
+)
+
+
+class FakeDisplayChild:
+    """A fake ryuo_display.py (FAKE_DISPLAY) in tmp_path/fake, told what to do through the file
+    `mode` there, and an XDG_RUNTIME_DIR in tmp_path/xdg-run where listen() makes the Wayland and
+    D-Bus sockets that ryuod.session_env() looks for."""
+
+    def __init__(self, tmp_path):
+        self.dir = tmp_path / "fake"
+        self.dir.mkdir()
+        self.script = self.dir / "fake_display.py"
+        self.script.write_text(FAKE_DISPLAY)
+        self.run = tmp_path / "xdg-run"
+        self.run.mkdir()
+        self.sockets = []
+        self.mode("stream")
+
+    def mode(self, text):
+        (self.dir / "mode").write_text(text)
+
+    def listen(self, name):
+        s = socket.socket(socket.AF_UNIX)
+        s.bind(str(self.run / name))
+        self.sockets.append(s)
+
+    def env(self, wayland="wayland-0"):
+        env = {"XDG_RUNTIME_DIR": str(self.run), "PATH": os.environ.get("PATH", "")}
+        if wayland:
+            env["WAYLAND_DISPLAY"] = wayland
+        return env
+
+    def events(self):
+        p = self.dir / "events"
+        return p.read_text().splitlines() if p.exists() else []
+
+    def starts(self):
+        return [e for e in self.events() if e.startswith("start")]
+
+    def close(self):
+        for s in self.sockets:
+            s.close()
+
+
+def make_display(fake, environ=None, **kw):
+    """A started ryuod.Display running FakeDisplayChild `fake`, with short test timings."""
+    kw.setdefault("backoff", (0.2, 0.4))
+    kw.setdefault("stop_s", 5)
+    d = ryuod.Display(
+        cmd=[sys.executable, str(fake.script), str(fake.dir)], environ=fake.env() if environ is None else environ, **kw
+    )
+    d.cooler_poll = 0.05
+    d.start()
+    return d
+
+
+def wait_until(cond, timeout=5.0, what="condition"):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if v := cond():
+            return v
+        time.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {what}")

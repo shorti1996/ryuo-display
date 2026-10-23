@@ -70,6 +70,7 @@ def test_load_valid_file(state_path):
         "tempUnit": "Fahrenheit",
         "memoryMHz": 6000,
         "sensors": {"motherboard": "gigabyte_wmi:temp2"},
+        "secondDisplay": True,
         "unknown": "ignored",
     }
     write_json(state_path, saved)
@@ -87,6 +88,7 @@ def test_load_valid_file(state_path):
         "tempUnit",
         "memoryMHz",
         "sensors",
+        "secondDisplay",
     ):
         assert st[key] == saved[key], key
     assert "unknown" not in st
@@ -108,6 +110,7 @@ def test_load_partly_invalid_each_key_falls_back(state_path):
             "tempUnit": "Kelvin",
             "memoryMHz": True,  # bool is not an int here
             "sensors": {"motherboard": 5},
+            "secondDisplay": "on",
         },
     )
     s = ryuod.State(state_path)
@@ -132,6 +135,8 @@ def test_load_partly_invalid_each_key_falls_back(state_path):
         ("brightness", 50.0),
         ("memoryMHz", 20001),
         ("sensors", "auto"),
+        ("secondDisplay", 1),
+        ("secondDisplay", None),
     ],
 )
 def test_load_rejects_bad_value(state_path, key, value):

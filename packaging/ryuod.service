@@ -10,6 +10,10 @@ ExecStart=/usr/bin/python3 -u @APPDIR@/ryuod.py
 # crash or a port clash (exit 1) is retried.
 Restart=on-failure
 RestartSec=5
+# On stop only ryuod gets SIGTERM. It stops the second display (ryuo_display.py) itself, which
+# waits for the receiver on the cooler to release its video decoder; the default KillMode would
+# signal every process at once, and a receiver killed mid-release leaks the decoder.
+KillMode=mixed
 
 [Install]
 WantedBy=default.target

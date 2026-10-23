@@ -78,6 +78,9 @@ class Tray:
         self.stats = m.addAction("Show stats on panel")
         self.stats.setCheckable(True)
         self.stats.triggered.connect(lambda on: self.post("/api/overlay", {"statsVisible": on}))
+        self.display = m.addAction("Use panel as second display")
+        self.display.setCheckable(True)
+        self.display.triggered.connect(lambda on: self.post("/api/display", {"on": on}))
         self.bright_menu = m.addMenu("Brightness")
         group = QActionGroup(m)
         self.bright = {}
@@ -129,6 +132,10 @@ class Tray:
         self.tray.setIcon(self.icons["on" if live else "off"])
         for a in (self.stats, self.bright_menu.menuAction(), self.stop):
             a.setEnabled(up)
+        # A ryuod from before the second display sends no "display" key.
+        display = self.state.get("display") if up else None
+        self.display.setEnabled(display is not None)
+        self.display.setChecked(bool(display and display.get("on")))
         self.start.setVisible(not up)
         if up:
             self.stats.setChecked(cfg.get("statsVisible", True))

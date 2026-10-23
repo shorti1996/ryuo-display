@@ -7,9 +7,9 @@ run. Everything below exists so no test can touch it:
   module is imported, because ryuo_proto.PIDFILE and ryuo_tray.LOCK are computed at import time.
 - The autouse `_safety` fixture re-points every runtime path at the test's tmp_path and wraps
   os.open, open, os.replace, os.remove, os.kill, socket bind/connect and subprocess.Popen. A call
-  that reaches /dev/hidraw*, the real pidfile or state file, port 8746, adb, systemctl or one of
-  the project scripts raises SafetyViolation and fails the test at teardown, even when the call
-  happened on a worker thread that swallowed the exception.
+  that reaches /dev/hidraw*, the real pidfile or state file, port 8746, adb, systemctl, the desktop
+  tools of ryuo_display.py or one of the project scripts raises SafetyViolation and fails the test
+  at teardown, even when the call happened on a worker thread that swallowed the exception.
 """
 
 import builtins
@@ -39,8 +39,9 @@ PROTECTED_PATHS = {
     )
 }
 REAL_PORT = 8746
-FORBIDDEN_PROGRAMS = {"adb", "systemctl"}
-FORBIDDEN_SCRIPTS = ("ryuod.py", "ryuo.py", "ryuo_tray.py")
+# The desktop tools ryuo_display.py runs would add a real virtual monitor to the user's desktop.
+FORBIDDEN_PROGRAMS = {"adb", "systemctl", "krfb-virtualmonitor", "kscreen-doctor", "gst-launch-1.0", "pw-link"}
+FORBIDDEN_SCRIPTS = ("ryuod.py", "ryuo.py", "ryuo_tray.py", "ryuo_display.py")
 
 # Redirect before any test module imports ryuo_proto (PIDFILE is computed at import time).
 _SESSION_DIR = tempfile.mkdtemp(prefix="ryuo-tests-")
@@ -171,7 +172,7 @@ def _safety(monkeypatch, tmp_path):
             if kw.get("shell"):
                 argv = " ".join(argv).split()
             if argv and os.path.basename(argv[0]) in FORBIDDEN_PROGRAMS:
-                _violate(f"subprocess {argv!r}: adb and systemctl are off limits in tests")
+                _violate(f"subprocess {argv!r}: adb, systemctl and the desktop tools are off limits in tests")
             # `python -c CODE word…` runs only CODE; the words are its argv, which is how the
             # pidfile tests make fake drivers named ryuod.py / ryuo.py. Anything else is checked whole.
             run = argv[:1] if argv[1:2] == ["-c"] else argv

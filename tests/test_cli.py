@@ -1,6 +1,7 @@
 """ryuo.py (CLI) parsing and dispatch, and ryuod.main()'s lifecycle, with the device mocked."""
 
 import contextlib
+import json
 import os
 import subprocess
 import sys
@@ -313,6 +314,9 @@ class FakeHttpd:
     def shutdown(self):
         self.shut = True
 
+    def server_close(self):
+        self.closed = True
+
 
 class FakeThread:
     def __init__(self, *a):
@@ -331,6 +335,28 @@ class FakeThread:
         pass
 
 
+class FakeDisplay:
+    """ryuod.Display without a child process; records the switch and the order of shutdown."""
+
+    def __init__(self, events, **kw):
+        self.events, self.kw = events, kw
+        self.started = False
+        self.wanted = []
+
+    def start(self):
+        self.started = True
+
+    def set(self, on):
+        self.wanted.append(on)
+
+    def status(self):
+        return {"on": bool(self.wanted and self.wanted[-1]), "state": "on" if self.wanted and self.wanted[-1] else "off"}
+
+    def stop(self, timeout):
+        self.events.append(("display stop", timeout))
+        return True
+
+
 @pytest.fixture
 def daemon_main(monkeypatch, tmp_path):
     made = {}
@@ -344,6 +370,8 @@ def daemon_main(monkeypatch, tmp_path):
     monkeypatch.setattr(ryuod, "bind", bind)
     monkeypatch.setattr(ryuod, "Sampler", lambda st: made.setdefault("sampler", FakeThread(st)))
     monkeypatch.setattr(ryuod, "Device", lambda st, s, mode: made.setdefault("device", FakeThread(st, s, mode)))
+    events = made["events"] = []
+    monkeypatch.setattr(ryuod, "Display", lambda **kw: made.setdefault("display", FakeDisplay(events, **kw)))
     monkeypatch.setattr(ryuod, "log", lambda msg: made.setdefault("log", []).append(msg))
     handlers = {}
     monkeypatch.setattr(ryuod.signal, "signal", lambda sig, fn: handlers.__setitem__(sig, fn))
@@ -385,6 +413,63 @@ def test_ryuod_main_sigterm_sends_disconn(daemon_main, monkeypatch):
     assert dev.stopped_with is True  # nobody took over: send disconn
     assert ryuod.signal.SIGINT in daemon_main["handlers"]
     assert not os.path.exists(P.PIDFILE)
+    display = daemon_main["display"]
+    assert display.started
+    assert display.wanted == []  # switch off in a fresh state: nothing started
+    assert daemon_main["httpd"].closed  # the port is free while the second display stops
+
+
+def run_main_until_sigterm(daemon_main):
+    def fire():
+        while ryuod.signal.SIGTERM not in daemon_main["handlers"]:
+            time.sleep(0.01)
+        daemon_main["handlers"][ryuod.signal.SIGTERM](15, None)
+
+    t = threading.Thread(target=fire, daemon=True)
+    t.start()
+    ryuod.main()
+    t.join(2)
+
+
+def test_ryuod_main_restores_second_display(daemon_main, monkeypatch):
+    monkeypatch.setattr(P, "superseded", lambda: False)
+    monkeypatch.setattr(P, "running_driver", lambda: None)
+    os.makedirs(os.path.dirname(daemon_main["state"]))
+    with open(daemon_main["state"], "w") as f:
+        json.dump({"secondDisplay": True}, f)
+    run_main_until_sigterm(daemon_main)
+    display = daemon_main["display"]
+    assert display.started and display.wanted == [True]
+    assert any("switch saved on" in m for m in daemon_main["log"])
+
+
+def test_ryuod_main_stops_second_display_before_the_device(daemon_main, monkeypatch):
+    monkeypatch.setattr(P, "superseded", lambda: False)
+    monkeypatch.setattr(P, "running_driver", lambda: None)
+    dev_stop = FakeThread.stop
+
+    def stop(self, send_disconn):
+        daemon_main["events"].append(("device stop", send_disconn))
+        dev_stop(self, send_disconn)
+
+    monkeypatch.setattr(FakeThread, "stop", stop)
+    run_main_until_sigterm(daemon_main)
+    # The heartbeat keeps HomeUI out of standby while ryuo_display.py tears down, which takes
+    # about 10 s; it is never cut short.
+    assert daemon_main["events"] == [("display stop", ryuod.DISPLAY_STOP_S + 5), ("device stop", True)]
+
+
+def test_ryuod_main_display_cooler_token(daemon_main, monkeypatch):
+    monkeypatch.setattr(P, "superseded", lambda: False)
+    monkeypatch.setattr(P, "running_driver", lambda: None)
+    run_main_until_sigterm(daemon_main)
+    cooler = daemon_main["display"].kw["cooler"]
+    dev = daemon_main["device"]
+    dev.recoveries = 3
+    dev.status = lambda: {"connected": False}
+    assert cooler() is None
+    dev.status = lambda: {"connected": True}
+    assert cooler() == 3
 
 
 def test_ryuod_main_takeover_skips_disconn(daemon_main, monkeypatch, spawn):

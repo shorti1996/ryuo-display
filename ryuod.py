@@ -8,7 +8,8 @@ HomeUI restart. Settings persist in ~/.config/ryuo/state.json. A video uploaded 
 page is converted on an upload thread when the panel cannot play it as it is (ryuo_media.py),
 pushed with adb and played. Files in /sdcard/pcMedia can be deleted from the page, and previewed
 there from copies pulled with adb: a thumbnail, and an H.264 proxy for the HEVC files Chrome
-cannot decode.
+cannot decode. While the second-display switch is on, ryuo_display.py runs as a child process and
+shows a virtual monitor of the desktop on the panel.
 """
 import argparse
 import collections
@@ -25,6 +26,7 @@ import select
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -56,7 +58,7 @@ DEFAULT_STATE = {
     "version": 1, "media": [], "playMode": "Single", "ratio": "2:1",
     "items": DEFAULT_ITEMS, "statsVisible": True, "titleColor": "#E5252B", "contentColor": "#FFFFFF",
     "filter": {"on": False, "opacity": 100}, "brightness": 100, "tempUnit": "Celsius",
-    "memoryMHz": 0, "sensors": {"motherboard": "auto"},
+    "memoryMHz": 0, "sensors": {"motherboard": "auto"}, "secondDisplay": False,
 }
 TEMP_ITEMS = {"CPU Temperature", "GPU Temperature", "Hard Disk Temperature", "Motherboard Temperature"}
 # (item, source key, note) for the custom labels; the unit slot always reads RPM.
@@ -219,6 +221,7 @@ class State:
             "memoryMHz": lambda v: check_int(v, "memoryMHz", 0, 20000),
             "sensors": lambda v: {"motherboard": v.get("motherboard")}
             if isinstance(v, dict) and isinstance(v.get("motherboard"), str) else None,
+            "secondDisplay": lambda v: v if isinstance(v, bool) else None,
         }
         for key, fn in loaders.items():
             if key in raw:
@@ -252,7 +255,8 @@ class State:
 
 def public_config(st):
     return {k: st[k] for k in ("media", "playMode", "ratio", "items", "statsVisible", "titleColor",
-                               "contentColor", "filter", "brightness", "tempUnit", "memoryMHz", "sensors")}
+                               "contentColor", "filter", "brightness", "tempUnit", "memoryMHz", "sensors",
+                               "secondDisplay")}
 
 
 def shown_items(st):
@@ -893,6 +897,280 @@ class Device(threading.Thread):
             f.set_result(result)
 
 
+# ---------------------------------------------------------------- second display
+
+DISPLAY_SCRIPT = os.path.join(HERE, "ryuo_display.py")
+DISPLAY_PYTHON = "/usr/bin/python3"  # the system Python has PyGObject, which the window watch needs
+DISPLAY_BACKOFF = (5, 10, 20, 40, 60)  # s before each retry after a failed start; the last value repeats
+DISPLAY_STOP_S = 60  # s ryuo_display.py gets after SIGTERM before SIGKILL; a clean stop takes about 10 s
+DISPLAY_TAIL = 20  # lines of its output kept for the error message
+# Output of failures that a retry would hit again. Retried only after the switch is turned off and
+# on, or after the cooler reconnects (USB reset, resume from suspend).
+DISPLAY_PERMANENT = ("missing programs:", "make receiver", "no cooler on adb")
+DISPLAY_STATS_RE = re.compile(r"sent ([0-9.]+) fps, ([0-9.]+) Mb/s")
+# The receiver's own 5 s frame-rate line; logged, like the one above, only with -v.
+DISPLAY_RECEIVER_FPS_RE = re.compile(r"ryuo-display: [0-9.]+ fps")
+# ryuo_display.py's "pointer: shown" or "pointer: not shown: <reason>" line.
+DISPLAY_POINTER = "pointer: "
+
+
+def display_pointer(line):
+    """{"shown": bool, "reason": str or None} from a "pointer: " line, else None."""
+    if not line.startswith(DISPLAY_POINTER):
+        return None
+    rest = line[len(DISPLAY_POINTER) :].strip()
+    if rest == "shown":
+        return {"shown": True, "reason": None}
+    return {"shown": False, "reason": rest.removeprefix("not shown: ") or None}
+
+
+class NotReady(Exception):
+    """The desktop session ryuo_display.py needs is not there (yet)."""
+
+
+def is_socket(path):
+    try:
+        return stat.S_ISSOCK(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
+def session_env(environ):
+    """The environment for ryuo_display.py. Raises NotReady while there is no Wayland session.
+
+    ryuod.service can start before Plasma has put WAYLAND_DISPLAY into the systemd user
+    environment, so a missing or stale value is replaced by the wayland-N socket that exists."""
+    env = dict(environ)
+    run = env.get("XDG_RUNTIME_DIR")
+    if not run or not os.path.isdir(run):
+        raise NotReady("XDG_RUNTIME_DIR is not set; ryuod must run in your user session")
+    name = env.get("WAYLAND_DISPLAY")
+    if not name or not is_socket(os.path.join(run, name)):
+        try:
+            names = os.listdir(run)
+        except OSError:
+            names = []
+        found = sorted(f for f in names if re.fullmatch(r"wayland-[0-9]+", f) and is_socket(os.path.join(run, f)))
+        if not found:
+            raise NotReady(f"no Wayland session yet (no wayland-N socket in {run}); waiting for Plasma to start")
+        env["WAYLAND_DISPLAY"] = found[0]
+    if not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        bus = os.path.join(run, "bus")
+        if not is_socket(bus):
+            raise NotReady(f"no D-Bus session bus yet ({bus} is missing)")
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
+    return env
+
+
+def display_error(lines):
+    """The error in ryuo_display.py's output: from its last "error: " line to the end, else the
+    last 5 lines (a `missing programs` exit or a Python traceback)."""
+    starts = [i for i, line in enumerate(lines) if line.startswith("error: ")]
+    if starts:
+        out = lines[starts[-1] :]
+        return "\n".join([out[0][len("error: ") :], *out[1:]])
+    return "\n".join(lines[-5:])
+
+
+class Display(threading.Thread):
+    """Runs ryuo_display.py while the second-display switch is on, so the panel shows a virtual
+    monitor of the desktop. ryuod keeps its heartbeat going meanwhile: without it HomeUI drops
+    to standby, which lowers the backlight to 50/255.
+
+    The child runs in its own session, so a Ctrl-C in ryuod's terminal reaches only ryuod. It is
+    stopped with SIGTERM and given DISPLAY_STOP_S to finish: it waits for the receiver on the
+    cooler to release the hardware decoder, and a receiver killed before that leaks the decoder.
+
+    A failed start is retried after DISPLAY_BACKOFF; a child that streamed and then exited starts
+    the backoff over. Failures in DISPLAY_PERMANENT (or exit status 2: usage error, script not
+    found) are not retried until set(True) is called again or `cooler()`, a value that changes
+    when the cooler reconnects (None while it is disconnected), changes."""
+
+    def __init__(self, cmd=None, environ=None, cooler=lambda: None, backoff=DISPLAY_BACKOFF, stop_s=DISPLAY_STOP_S):
+        super().__init__(daemon=True, name="display")
+        python = DISPLAY_PYTHON if os.path.exists(DISPLAY_PYTHON) else sys.executable
+        self.cmd = cmd or [python, "-u", DISPLAY_SCRIPT]
+        self.environ = os.environ if environ is None else environ
+        self.cooler, self.backoff, self.stop_s = cooler, backoff, stop_s
+        self.cond = threading.Condition()
+        self.want = False
+        self.quit = False
+        self.proc = None
+        self.failures = 0  # failed starts in a row
+        self.retry_at = None  # monotonic time of the next start after a failure
+        self.blocked = None  # (cooler(),) after a permanent failure
+        self.cooler_poll = 2.0  # s between cooler() checks while blocked
+        self.terminating = False  # SIGTERM sent to the current child
+        self.resume_state = None  # the state set(False) replaced with "stopping"
+        self.tail = collections.deque(maxlen=DISPLAY_TAIL)
+        self.st = {"state": "off", "fps": None, "mbps": None, "message": None, "error": None, "pointer": None}
+
+    # -- called from HTTP threads and main()
+
+    def set(self, on):
+        """Turn the switch on or off. On while it is already on retries a failed start now."""
+        with self.cond:
+            if on:
+                self.retry_at = self.blocked = None
+                if not self.want:
+                    self.failures = 0
+                if self.proc is None:
+                    # So the reply to the switch already says what happens next.
+                    self.st.update(state="starting", fps=None, mbps=None, message=None, error=None, pointer=None)
+            elif self.proc is not None and self.st["state"] != "stopping":
+                self.resume_state = self.st["state"]
+                self.st.update(state="stopping")
+            if on and self.proc is not None and not self.terminating and self.st["state"] == "stopping":
+                # Turned off and on again before the display thread got to stop the child.
+                self.st["state"] = self.resume_state
+            self.want = on
+            self.cond.notify_all()
+
+    def status(self):
+        with self.cond:
+            out = {"on": self.want, **self.st, "retryInS": None}
+            if self.retry_at is not None and self.st["state"] == "retrying":
+                out["retryInS"] = max(0, round(self.retry_at - time.monotonic()))
+            return out
+
+    def stop(self, timeout):
+        """Stop the child (if any) and the thread. False if it is still running after timeout s."""
+        with self.cond:
+            self.quit = True
+            self.cond.notify_all()
+        if self.is_alive():
+            self.join(timeout)
+        return not self.is_alive()
+
+    # -- display thread
+
+    def update(self, **kw):
+        with self.cond:
+            self.st.update(kw)
+
+    def run(self):
+        while self.wait_for_start():
+            self.run_child()
+
+    def wait_for_start(self):
+        """Block until a child should start. False when the daemon is shutting down."""
+        with self.cond:
+            while not self.quit:
+                if not self.want:
+                    self.retry_at = self.blocked = None
+                    self.st.update(state="off", fps=None, mbps=None, message=None, error=None, pointer=None)
+                    self.cond.wait()
+                    continue
+                if self.blocked is not None:
+                    cooler = self.cooler()
+                    if cooler is None or (cooler,) == self.blocked:
+                        self.cond.wait(self.cooler_poll)
+                        continue
+                    log("display: the cooler reconnected; trying the second display again")
+                if self.retry_at is not None and (left := self.retry_at - time.monotonic()) > 0:
+                    self.cond.wait(left)
+                    continue
+                self.retry_at = self.blocked = None
+                return True
+            return False
+
+    def run_child(self):
+        try:
+            env = session_env(self.environ)
+        except NotReady as e:
+            return self.failed(str(e), permanent=False)
+        self.tail.clear()
+        self.update(state="starting", fps=None, mbps=None, message=None, error=None, pointer=None)
+        try:
+            proc = subprocess.Popen(
+                self.cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                errors="replace",
+                env=env,
+                cwd=HERE,
+                start_new_session=True,
+            )
+        except OSError as e:
+            return self.failed(f"cannot run {self.cmd[0]}: {e.strerror}", permanent=True)
+        log(f"display: started ryuo_display.py (pid {proc.pid})")
+        with self.cond:
+            self.proc = proc
+        reader = threading.Thread(target=self.read, args=(proc,), daemon=True, name="display-output")
+        reader.start()
+        stopped = False
+        while proc.poll() is None:
+            with self.cond:
+                stopped = self.terminating = self.quit or not self.want
+                if not stopped:
+                    self.cond.wait(0.25)
+            if stopped:
+                self.terminate(proc)
+                break
+        reader.join(2)
+        with self.cond:
+            self.proc, self.terminating = None, False
+            streamed = self.st["state"] == "on"  # reached "streaming to the panel" before it exited
+        if stopped:
+            log(f"display: ryuo_display.py stopped (status {proc.returncode})")
+            return None
+        lines = list(self.tail)
+        error = display_error(lines) or "no output"
+        permanent = proc.returncode == 2 or any(p in error for p in DISPLAY_PERMANENT)
+        return self.failed(f"ryuo_display.py exited with status {proc.returncode}: {error}", permanent, streamed)
+
+    def terminate(self, proc):
+        self.update(state="stopping", fps=None, mbps=None)
+        with contextlib.suppress(ProcessLookupError):
+            proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(self.stop_s)
+        except subprocess.TimeoutExpired:
+            log(
+                f"display: ryuo_display.py still running {self.stop_s} s after SIGTERM; killing it. If the panel then"
+                " fails to play video: adb shell setprop ctl.restart android-hardware-media-c2-hal-1-1"
+            )
+            proc.kill()
+            proc.wait()
+
+    def read(self, proc):
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            m = DISPLAY_STATS_RE.fullmatch(line.strip())
+            with self.cond:
+                self.tail.append(line)
+                if m:
+                    self.st.update(fps=float(m.group(1)), mbps=float(m.group(2)))
+                elif (pointer := display_pointer(line.strip())) is not None:
+                    self.st["pointer"] = pointer
+                elif line.strip() and not DISPLAY_RECEIVER_FPS_RE.fullmatch(line.strip()):
+                    self.st["message"] = line
+                if line.startswith("streaming to the panel") and self.st["state"] == "starting":
+                    self.st["state"] = "on"
+            quiet = m or DISPLAY_RECEIVER_FPS_RE.fullmatch(line.strip())
+            if line.strip() and (not quiet or VERBOSE):
+                log(f"display: {line}")
+
+    def failed(self, error, permanent, streamed=False):
+        cooler = self.cooler() if permanent else None
+        delay = None
+        with self.cond:
+            if streamed:
+                self.failures = 0
+            if permanent:
+                self.blocked, self.retry_at = (cooler,), None
+                self.st.update(state="error", error=error, fps=None, mbps=None, message=None, pointer=None)
+            else:
+                delay = self.backoff[min(self.failures, len(self.backoff) - 1)]
+                self.failures += 1
+                self.retry_at = time.monotonic() + delay
+                self.st.update(state="retrying", error=error, fps=None, mbps=None, message=None, pointer=None)
+        then = "not retried until the switch is turned on again or the cooler reconnects" if permanent else None
+        log(f"display: {error}; {then or f'retrying in {delay} s'}")
+
+
 # ---------------------------------------------------------------- HTTP
 
 def adb_media():
@@ -1399,7 +1677,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         route = {"/api/overlay": self.post_overlay, "/api/brightness": self.post_brightness,
                  "/api/media/select": self.post_media_select, "/api/prefs": self.post_prefs,
                  "/api/media/upload/cancel": self.post_upload_cancel,
-                 "/api/media/delete": self.post_media_delete}.get(path)
+                 "/api/media/delete": self.post_media_delete, "/api/display": self.post_display}.get(path)
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -1436,7 +1714,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                     "frameMax": P.REPORT_LEN, "lastHeartbeatBytes": dev.last_hb_bytes,
                                     "uploadMax": MAX_UPLOAD},
                          "media": {k: dev.media[k] for k in ("preset", "custom")},
-                         "upload": self.d.upload.snapshot() if self.d.upload else None})
+                         "upload": self.d.upload.snapshot() if self.d.upload else None,
+                         "display": self.d.display.status() if self.d.display else None})
 
     def get_stats(self, _q):
         st = self.d.state.get()
@@ -1651,6 +1930,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         job.cancel()
         self.reply(200, {"ok": True, "upload": job.snapshot()})
 
+    def post_display(self, body):
+        """Turn the second display on or off. Answers at once; GET /api/state follows the child
+        through starting, on, stopping (up to about 10 s) and off."""
+        on = body.get("on")
+        if not isinstance(on, bool):
+            raise Invalid("on must be true or false")
+        if self.d.display is None:
+            return self.error(503, "second display is not available in this ryuod")
+        st = self.d.state.update({"secondDisplay": on})
+        self.d.display.set(on)
+        log(f"display: switched {'on' if on else 'off'} from the control page")
+        self.reply(200, {"ok": True, "display": self.d.display.status(), "config": public_config(st)})
+
     def post_prefs(self, body):
         st = self.d.state.get()
         changes = {}
@@ -1687,6 +1979,7 @@ class Daemon:
     upload_dir = default_upload_dir()
     preview = Previews(default_preview_dir())
     media_lock = threading.Lock()   # one delete at a time
+    display = None              # Display, the second-display supervisor
 
 
 def is_ryuod(pid):
@@ -1745,6 +2038,13 @@ def main():
     d.sampler.start()
     d.device = Device(d.state, d.sampler, a.heartbeat)
     d.device.start()
+    # The cooler token changes when the device worker reconnects, which re-arms a second display
+    # that stopped on a permanent error such as "no cooler on adb".
+    d.display = Display(cooler=lambda: d.device.recoveries if d.device.status()["connected"] else None)
+    d.display.start()
+    if d.state.get()["secondDisplay"]:
+        log("display: switch saved on; starting the second display")
+        d.display.set(True)
     threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True, name="http").start()
     log(f"ryuod: http://127.0.0.1:{a.port}/  state {a.state}  heartbeat {a.heartbeat}")
 
@@ -1758,6 +2058,15 @@ def main():
             break
     log("ryuod: shutting down")
     httpd.shutdown()
+    # Frees the port now: a newer ryuod waits only a few seconds for it, and the second display
+    # can take about 10 s to stop.
+    httpd.server_close()
+    # Stopped before the device worker, so the heartbeat keeps HomeUI out of standby while the
+    # receiver on the cooler releases its decoder and exits.
+    if d.display.status()["state"] != "off":
+        log("display: stopping the second display")
+    if not d.display.stop(DISPLAY_STOP_S + 5):
+        log("display: ryuo_display.py did not exit")
     # Another driver that already took the pidfile owns the screen now: no disconn.
     taken_over = P.running_driver() is not None
     d.device.stop(send_disconn=not taken_over)

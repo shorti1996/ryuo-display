@@ -1,4 +1,4 @@
-.PHONY: help install install-udev uninstall run tray test test-python test-frontend lint format deps
+.PHONY: help install install-udev uninstall run tray receiver test test-python test-frontend lint format deps
 
 MAKEFILE := $(abspath $(lastword $(MAKEFILE_LIST)))
 # Absolute path of this checkout; the unit and launcher run the code from here.
@@ -22,6 +22,19 @@ APPS_DIR := $(HOME)/.local/share/applications
 AUTOSTART_DIR := $(HOME)/.config/autostart
 STATE_DIR := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/ryuo
 UDEV_RULE := 70-rog-ryuo-iv.rules
+
+# The Android build tools and API jar for the receiver, downloaded on first build.
+# The zips' own top-level directories are android-15/ (build-tools 35.0.1) and android-35/.
+ANDROID_DIR ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/ryuo/android
+ANDROID_REPO := https://dl.google.com/android/repository
+BUILD_TOOLS_ZIP := build-tools_r35.0.1_linux.zip
+BUILD_TOOLS_SHA1 := e009a9b188cfeb1d2b4c318ab5cb4f1ddc368861
+PLATFORM_ZIP := platform-35_r02.zip
+PLATFORM_SHA1 := 0bb560a90a7a2cbd0dd8348224d518b638fe7949
+D8 := $(ANDROID_DIR)/android-15/d8
+ANDROID_JAR := $(ANDROID_DIR)/android-35/android.jar
+# A JRE with the jdk.compiler module is enough; no separate javac binary needed.
+JAVAC ?= java -m jdk.compiler/com.sun.tools.javac.Main
 
 # Rebuild the KDE menu cache when kbuildsycoca6 exists (Plasma only).
 define rebuild-menu
@@ -83,6 +96,31 @@ tray:
 	# Start the tray icon on the system python (PySide6 comes from python3-pyside6)
 	$(PYTHON) $(APPDIR)/ryuo_tray.py
 
+receiver: receiver/receiver.jar
+	@# Build the on-device stream receiver (downloads the Android build tools on first use)
+
+receiver/receiver.jar: receiver/RyuoDisplay.java $(D8) $(ANDROID_JAR)
+	rm -rf $(ANDROID_DIR)/classes && mkdir -p $(ANDROID_DIR)/classes
+	$(JAVAC) -nowarn -Xlint:none -source 17 -target 17 -cp $(ANDROID_JAR) \
+		-d $(ANDROID_DIR)/classes $(APPDIR)/receiver/RyuoDisplay.java
+	$(D8) --min-api 33 --lib $(ANDROID_JAR) --output $(APPDIR)/$@ $(ANDROID_DIR)/classes/*.class
+
+$(D8):
+	mkdir -p $(ANDROID_DIR)
+	curl -fL -o $(ANDROID_DIR)/$(BUILD_TOOLS_ZIP) $(ANDROID_REPO)/$(BUILD_TOOLS_ZIP)
+	echo "$(BUILD_TOOLS_SHA1)  $(ANDROID_DIR)/$(BUILD_TOOLS_ZIP)" | sha1sum -c -
+	unzip -q -o $(ANDROID_DIR)/$(BUILD_TOOLS_ZIP) -d $(ANDROID_DIR)
+	rm $(ANDROID_DIR)/$(BUILD_TOOLS_ZIP)
+	touch $@
+
+$(ANDROID_JAR):
+	mkdir -p $(ANDROID_DIR)
+	curl -fL -o $(ANDROID_DIR)/$(PLATFORM_ZIP) $(ANDROID_REPO)/$(PLATFORM_ZIP)
+	echo "$(PLATFORM_SHA1)  $(ANDROID_DIR)/$(PLATFORM_ZIP)" | sha1sum -c -
+	unzip -q -o $(ANDROID_DIR)/$(PLATFORM_ZIP) -d $(ANDROID_DIR)
+	rm $(ANDROID_DIR)/$(PLATFORM_ZIP)
+	touch $@
+
 test: test-python test-frontend
 	@# Run the Python and web page test suites
 
@@ -122,6 +160,21 @@ deps:
 	fi; \
 	if $(PYTHON) -c 'import PySide6' >/dev/null 2>&1; then ok "PySide6 for $(PYTHON)"; \
 	else need "PySide6 for $(PYTHON)" python3-pyside6; fi; \
+	echo "second display (optional; Plasma on Wayland, NVIDIA GPU):"; \
+	opt() { printf '  missing  %-34s dnf install %s\n' "$$1" "$$2"; }; \
+	for t in krfb-virtualmonitor:krfb unshare:util-linux-core pw-dump:pipewire-utils pw-link:pipewire-utils \
+		gst-launch-1.0:gstreamer1; do \
+		if command -v $${t%%:*} >/dev/null 2>&1; then ok $${t%%:*}; else opt $${t%%:*} $${t#*:}; fi; \
+	done; \
+	for e in pipewiresrc:pipewire-gstreamer glupload:gstreamer1-plugins-base \
+		nvh265enc:gstreamer1-plugins-bad-free gdppay:gstreamer1-plugins-bad-free; do \
+		if gst-inspect-1.0 --exists $${e%%:*} >/dev/null 2>&1; then ok "GStreamer $${e%%:*}"; \
+		else opt "GStreamer $${e%%:*}" $${e#*:}; fi; \
+	done; \
+	if $(PYTHON) -c 'import gi' >/dev/null 2>&1; then ok "PyGObject for $(PYTHON)"; \
+	else opt "PyGObject for $(PYTHON)" python3-gobject-base; fi; \
+	if [ -f $(APPDIR)/receiver/receiver.jar ]; then ok receiver/receiver.jar; \
+	else printf '  missing  %-34s make receiver\n' receiver/receiver.jar; fi; \
 	echo "dev:"; \
 	if command -v uv >/dev/null 2>&1; then ok uv; else want uv uv; fi; \
 	if command -v node >/dev/null 2>&1; then ok node; else want node nodejs; fi; \
