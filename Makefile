@@ -113,6 +113,13 @@ deps:
 	echo "runtime:"; \
 	if [ -x $(PYTHON) ]; then ok "$(PYTHON)"; else need "$(PYTHON)" python3; fi; \
 	if command -v adb >/dev/null 2>&1; then ok adb; else need adb android-tools; fi; \
+	if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then \
+		need "ffmpeg, ffprobe" "ffmpeg  (RPM Fusion)"; \
+	elif ffmpeg -hide_banner -encoders 2>/dev/null | grep -qE '^ *V[^ ]* +(libx265|hevc_nvenc) '; then \
+		ok "ffmpeg, ffprobe"; \
+	else \
+		printf '  MISSING  %-34s dnf swap ffmpeg-free ffmpeg --allowerasing  (RPM Fusion)\n' "libx265 in ffmpeg"; rc=1; \
+	fi; \
 	if $(PYTHON) -c 'import PySide6' >/dev/null 2>&1; then ok "PySide6 for $(PYTHON)"; \
 	else need "PySide6 for $(PYTHON)" python3-pyside6; fi; \
 	echo "dev:"; \

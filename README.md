@@ -26,6 +26,7 @@ Other distributions, desktops and firmware versions have not been tried.
 | Python 3.12 or newer at `/usr/bin/python3` | daemon, CLI, tray | the daemon and CLI use the standard library only |
 | PySide6 | tray icon | Fedora: `sudo dnf install python3-pyside6`. Arch: `pyside6`. Debian 13 / Ubuntu 26.04 and later: `python3-pyside6.qtcore`, `python3-pyside6.qtgui`, `python3-pyside6.qtwidgets` (Debian splits PySide6 into one package per Qt module). Elsewhere: install PySide6 with pip for `/usr/bin/python3`. |
 | `adb` (Fedora/Arch package `android-tools`, Debian/Ubuntu `adb`) | uploading videos | the daemon and the stats overlay work without it |
+| `ffmpeg` and `ffprobe` with the `libx265` encoder | uploading videos the panel can't decode as they are | Fedora's own `ffmpeg-free` has no `libx265`: install `ffmpeg` from RPM Fusion (`sudo dnf swap ffmpeg-free ffmpeg --allowerasing` if `ffmpeg-free` is installed). Arch and Debian/Ubuntu `ffmpeg` include it. With a working NVIDIA GPU, `hevc_nvenc` is used instead. The service runs `/usr/bin/python3`, so the `imageio-ffmpeg` wheel in the uv environment never reaches it. |
 | a StatusNotifier system tray | tray icon | KDE Plasma has one. GNOME needs the AppIndicator extension. |
 | `nvidia-smi` (optional) | NVIDIA GPU stats | AMD GPUs are read from sysfs |
 | `uv`, `node`/`npm` | development only | tests and lint |

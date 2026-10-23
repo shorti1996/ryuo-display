@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "Linux driver, stats daemon and tray for the ASUS ROG RYUO IV pump LCD"
 requires-python = ">=3.12"
 # Runtime is the standard library plus the ffmpeg and adb binaries; the tray also needs PySide6
-# (python3-pyside6 on Fedora). imageio-ffmpeg supplies an ffmpeg binary when none is on PATH;
-# ryuod imports it only for that fallback and runs without it.
+# (python3-pyside6 on Fedora). imageio-ffmpeg supplies an ffmpeg binary when none is on PATH, but
+# only under `uv run`: the installed service runs /usr/bin/python3, which can't import it.
 dependencies = [
     "imageio-ffmpeg>=0.6.0",
 ]

@@ -12,7 +12,8 @@ Anything outside those limits is re-encoded to 2240x1080 HEVC Main, 8-bit 4:2:0,
 and 60 fps, without audio (the playback chain has no audio sink).
 
 ffmpeg comes from PATH, else from the imageio-ffmpeg package. That bundled build has no ffprobe;
-without one, files are not checked and always transcoded.
+without one, files are not checked and always transcoded. The package is only importable under
+`uv run`: the installed service runs /usr/bin/python3 and needs ffmpeg on PATH.
 """
 import collections
 import contextlib
@@ -93,7 +94,7 @@ def resolve():
     """Find ffmpeg (PATH, then imageio-ffmpeg), ffprobe (PATH only) and the HEVC encoder to use."""
     ffmpeg = shutil.which("ffmpeg") or bundled_ffmpeg()
     if ffmpeg is None:
-        raise MediaError("no ffmpeg: install it (dnf install ffmpeg) or run `uv sync` for imageio-ffmpeg")
+        raise MediaError("no ffmpeg on PATH: install it (`make deps` names the package)")
     return Tools(ffmpeg, shutil.which("ffprobe"), "hevc_nvenc" if nvenc_works(ffmpeg) else "libx265")
 
 
