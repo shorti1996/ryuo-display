@@ -1,0 +1,2 @@
+# ASUS ROG RYUO IV pump LCD: let the logged-in user open its HID control interface
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="1c76", TAG+="uaccess"

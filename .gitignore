@@ -1,0 +1,7 @@
+# Vendor APKs, their decompiled sources and the jadx install stay local
+re/apk/
+re/src/
+re/jadx/
+# Panel screenshots show whatever media was playing
+re/*.png
+__pycache__/
