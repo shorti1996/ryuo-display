@@ -81,6 +81,7 @@ stack.
 | One capture restart 3 s after streaming starts | Still about 6 fps. Reverted. |
 | SlowCycle detector restarting on the signature (uncommitted) | Detects the cycle 2.5–3.4 s after the first frame. On its own, 3 restarts at 3, 7 and 13 s all fell back into the 500 ms cycle (15:41). |
 | `stream-properties=props,stream.is-live=false` on pipewiresrc | Slow cycle in 1 of 3 starts (20 s in; one detector restart cleared it). But frames are unpaced: up to 102 fps sent, more than the cooler decodes, and the panel lagged. Reverted. PipeWire did report `stream.is-live: FALSE`, so the property reached the stream; the remaining slow start comes from a path not yet identified. |
+| `is-live=false` plus caps filter `video/x-raw(memory:DMABuf),max-framerate=60/1;video/x-raw,max-framerate=60/1` after pipewiresrc | `pw-dump` showed the negotiated `maxFramerate 60/1`, yet the PC still sent 97–102 fps (5 s windows), and the user saw lag. Slow cycle in 2 of 3 starts; in one start, 3 detector restarts all fell back into the 500 ms cycle. Reverted. (`video/x-raw(ANY),…` fails with "No supported formats found", because pipewiresrc's template is ANY.) |
 
 ## Design already agreed
 
@@ -88,18 +89,18 @@ stack.
   `display-black-background`, not merged into main).
 - **Self-healing on the slow-cycle signature:** the user asked for it; it's implemented as the
   uncommitted SlowCycle detector with a cooldown and a cap.
-- **Open, being tried next:** a non-live pipewiresrc with frames capped at 60 fps (caps
-  `max-framerate=60/1` after pipewiresrc), so KWin paces itself and nothing waits on stale
-  timestamps.
+- **Tried and failed:** a non-live pipewiresrc with frames capped at 60 fps (see "Tried, with
+  results"). No workaround in the GStreamer pipeline is known to work; the remaining candidates are
+  in "Open questions".
 
 ## Recommended order of work
 
 | Step | Ships alone? |
 |---|---|
-| 1. Try `stream.is-live=false` plus a `max-framerate=60/1` caps filter; measure with the harness (sent fps ≤ 60, no 3-frame cycle) | Yes. If it works, it is the fix until KWin 6.8. |
-| 2. Commit the SlowCycle detector as a safety net, whatever step 1 shows | Yes |
-| 3. Remove the temporary `RYUO_FRAME_LOG` hook, or turn it into a documented debug option | With step 2 |
-| 4. When the system moves to Fedora 45 / KWin ≥ 6.8: re-measure with the harness, then drop whatever workaround step 1 added if the cycle is gone | Later |
+| 1. Decide whether to keep the SlowCycle detector: it recognises the cycle reliably, but its restarts cleared it only some of the time (once at 15:44; never in the 15:41 and 15:53 starts), and each restart pauses the panel for about 80 ms | Yes |
+| 2. Remove the temporary `RYUO_FRAME_LOG` hook, or turn it into a documented debug option | With step 1 |
+| 3. When the system moves to Fedora 45 / KWin ≥ 6.8: re-measure with the harness (success criteria 1–3) | Later; expected to be the real fix |
+| 4. Until then, the only workaround known to work is a window that keeps drawing on the panel when the stream starts (for example a playing video). A tiny always-drawing surface placed by the tool is untested. | Optional |
 
 ## Files
 
@@ -189,7 +190,8 @@ Traps:
 - **What still causes a slow start with `stream.is-live=false`** (1 in 3 starts)? Running the
   encoder with `GST_DEBUG=basesrc:6` and `GST_DEBUG_FILE=<path>` would show whether any clock wait
   remains (`live with sync, ts_offset …`, `waiting for clock`).
-- **Does KWin honour `max-framerate` from the consumer's caps** to pace a non-live stream? The
-  research mentions max_framerate negotiation, but it wasn't verified.
-- **Why do more than 60 fps come from a 60 Hz virtual output** once the source isn't live (102 fps
-  measured)? Possibly separate cursor and content frames. Unverified.
+- **Why do more than 60 fps come from a 60 Hz virtual output** once the source isn't live, even
+  with `maxFramerate 60/1` negotiated (97–102 fps measured)? KWin's pacing in
+  `screencaststream.cpp:514-522` should allow at most one frame per 16 ms. Possibly cursor
+  updates take another path, or two frames go out per repaint. Unverified; a frame log with
+  frame sizes (cursor-only frames would be small) would show it.
