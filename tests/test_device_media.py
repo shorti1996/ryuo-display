@@ -147,6 +147,7 @@ def test_deleting_the_only_playlist_entry_plays_the_first_preset(api):
     assert cfg["media"] == ["RYUO_IV_HW_Info_01.mp4"]
     assert body["sent"] == ["POST mediaDelete", "POST waterBlockScreenId"]
     assert body["restartsVideo"] is True
+    assert body["heldByDisplay"] is False
     assert body["config"]["media"] == ["RYUO_IV_HW_Info_01.mp4"]
     with open(api.d.state.path) as f:
         assert json.load(f)["media"] == ["RYUO_IV_HW_Info_01.mp4"]
@@ -169,6 +170,27 @@ def test_delete_outside_the_playlist_leaves_the_video_alone(api):
     assert body["restartsVideo"] is False
     assert body["sent"] == ["POST mediaDelete"]
     assert api.d.state.get()["media"] == [PRESET[1]]
+
+
+def test_delete_while_the_second_display_streams_saves_the_fallback_without_sending(api):
+    api.d.backdrop.on = True
+    api.d.state.update({"media": [CUSTOM[0]], "playMode": "Single"})
+    status, _, body = api.delete([CUSTOM[0]])
+    assert status == 200, body
+    assert api.d.state.get()["media"] == ["RYUO_IV_HW_Info_01.mp4"]
+    assert [c for _, c, _ in api.d.device.sent] == ["mediaDelete", "conn"]
+    assert body["sent"] == ["POST mediaDelete"]
+    assert (body["heldByDisplay"], body["restartsVideo"]) == (True, False)
+    assert body["config"]["media"] == ["RYUO_IV_HW_Info_01.mp4"]
+
+
+def test_black_image_of_the_second_display_cannot_be_deleted(api):
+    api.d.device.media["custom"] = [*CUSTOM, ryuod.BLACK_NAME]
+    status, _, body = api.delete([CUSTOM[0], ryuod.BLACK_NAME])
+    assert status == 400
+    assert body["error"] == "display-black.png is used by the second display; delete it from the stock app if needed"
+    assert api.d.device.sent == []
+    assert on_device(api, CUSTOM[0])
 
 
 def test_deleted_name_leaves_the_media_list_and_cannot_be_played(api):

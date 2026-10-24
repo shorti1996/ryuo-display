@@ -79,7 +79,10 @@ export function defaultConfig() {
 
 /** ryuod.Display.status() with the switch off. */
 export function defaultDisplay() {
-  return { on: false, state: "off", fps: null, mbps: null, message: null, error: null, pointer: null, retryInS: null };
+  return {
+    on: false, state: "off", fps: null, mbps: null, message: null, error: null, pointer: null, backgroundError: null,
+    retryInS: null,
+  };
 }
 
 export function defaultDevice() {
@@ -96,12 +99,16 @@ class Invalid extends Error {}
  * A fake ryuod. Tests change `config`, `device`, `stats`, `mediaLists` directly, queue one-off
  * replies with `replyOnce`, and read what the page sent from `calls`.
  */
-export function makeDaemon({ config = {}, device = {}, stats = {}, media, display = {} } = {}) {
+export function makeDaemon({ config = {}, device = {}, stats = {}, media, display = {}, upload = null } = {}) {
   const d = {
     config: { ...defaultConfig(), ...clone(config) },
     device: { ...defaultDevice(), ...clone(device) },
     // The second-display status in GET /api/state; null stands for a ryuod without the feature.
     display: display === null ? null : { ...defaultDisplay(), ...clone(display) },
+    // ryuod.Upload.snapshot() in GET /api/state, or null before the first upload.
+    upload: clone(upload),
+    // ryuod.Backdrop.on: HomeUI is held on the black image, so a new selection is saved, not sent.
+    held: false,
     // Sampled values by item: {value, panel}; unit and available come from the catalog.
     stats: {
       "CPU Temperature": { value: 50.4, panel: "50" },
@@ -142,7 +149,7 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
       ok: true, device: clone(d.device), config: clone(d.config),
       limits: { slots: 6, brightnessMax: 102, frameMax: 1024, lastHeartbeatBytes: 548 },
       media: { preset: [...d.mediaLists.preset], custom: [...d.mediaLists.custom] },
-      display: clone(d.display),
+      display: clone(d.display), upload: clone(d.upload),
     }),
     "GET /api/stats": () => {
       const values = {};
@@ -194,7 +201,12 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
       if (missing.length) throw new Invalid(`not in the device media list: ${missing.join(", ")} (GET /api/media?refresh=1)`);
       if (!["Single", "Cycle", "Random"].includes(mode)) throw new Invalid("playMode must be Single, Cycle or Random");
       Object.assign(d.config, { media: [...media], playMode: mode });
-      return reply(200, { ok: true, ...applied(), sent: ["POST waterBlockScreenId"], restartsVideo: true, config: clone(d.config) });
+      if (d.held) {
+        return reply(200, { ok: true, applied: false, acked: false, heldByDisplay: true, sent: [], restartsVideo: false, config: clone(d.config) });
+      }
+      return reply(200, {
+        ok: true, ...applied(), heldByDisplay: false, sent: ["POST waterBlockScreenId"], restartsVideo: true, config: clone(d.config),
+      });
     },
     "POST /api/media/delete": (body) => {
       const { names } = body;
@@ -203,6 +215,7 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
       }
       for (const n of names) {
         if (!n || n === "." || n === ".." || /[/\\\0]/.test(n)) throw new Invalid(`'${n}' is not a bare file name`);
+        if (n === "display-black.png") throw new Invalid(`${n} is used by the second display; delete it from the stock app if needed`);
         if (d.mediaLists.preset.includes(n)) throw new Invalid(`${n} is a preset; only files in /sdcard/pcMedia can be deleted`);
         if (!d.mediaLists.custom.includes(n)) throw new Invalid(`not in /sdcard/pcMedia: ${n} (GET /api/media?refresh=1)`);
       }
@@ -211,14 +224,14 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
       d.mediaLists.sizes = Object.fromEntries(Object.entries(d.mediaLists.sizes || {}).filter(([n]) => !gone.has(n)));
       const sent = ["POST mediaDelete"];
       const playlist = d.config.media.filter((m) => !gone.has(m));
-      const restartsVideo = playlist.length !== d.config.media.length;
-      if (restartsVideo) {
+      const changed = playlist.length !== d.config.media.length;
+      if (changed) {
         d.config.media = playlist.length ? playlist : [[...d.mediaLists.preset].sort()[0]];
-        sent.push("POST waterBlockScreenId");
+        if (!d.held) sent.push("POST waterBlockScreenId");
       }
       return reply(200, {
-        ok: true, deleted: [...names], remaining: [], listedBy: "conn", sent, ...applied(), restartsVideo,
-        config: clone(d.config), media: clone(d.mediaLists),
+        ok: true, deleted: [...names], remaining: [], listedBy: "conn", sent, ...applied(), restartsVideo: changed && !d.held,
+        heldByDisplay: changed && d.held, config: clone(d.config), media: clone(d.mediaLists),
       });
     },
     // The page only fetches this after its <video> or <img> reports an error.

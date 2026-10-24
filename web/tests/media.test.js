@@ -261,6 +261,66 @@ describe("Delete", () => {
   });
 });
 
+describe("the second display's black image", () => {
+  const BLACK = "display-black.png";
+
+  it("is listed with a second display tag and a disabled Delete that says why", async () => {
+    await openPage(makeDaemon({ media: { custom: [...CUSTOM, BLACK] } }));
+    expect(row(BLACK).querySelector(".tag").textContent).toBe("second display");
+    expect(delButton(BLACK).disabled).toBe(true);
+    expect(delButton(BLACK).title).toBe("Used by the second display. Delete it from the stock app if needed.");
+    for (const name of CUSTOM) {
+      expect(row(name).querySelector(".tag")).toBeNull();
+      expect(delButton(name).disabled).toBe(false);
+    }
+  });
+
+  it("can be chosen as a normal background", async () => {
+    const d = await openPage(makeDaemon({ media: { custom: [...CUSTOM, BLACK] } }));
+    box("RYUO_IV_HW_Info_04.mp4").click();
+    box(BLACK).click();
+    $("play").click();
+    await tick(0);
+    expect(d.posts("/api/media/select")).toEqual([{ media: [BLACK], playMode: "Single" }]);
+    expect(checked()).toEqual([BLACK]);
+  });
+});
+
+describe("while the second display holds HomeUI on the black image", () => {
+  it("Play says the selection applies when the second display is off", async () => {
+    const d = await openPage();
+    d.held = true;
+    box(CUSTOM[0]).click();
+    $("play").click();
+    await tick(0);
+    expect($("result").textContent).toBe("Play: nothing sent — saved; applies when the second display is off");
+    expect(checked()).toEqual(["RYUO_IV_HW_Info_04.mp4", CUSTOM[0]]);
+  });
+
+  it("Delete says the fallback playlist applies when the second display is off", async () => {
+    const d = await openPage(makeDaemon({ config: { media: [CUSTOM[0]] } }));
+    d.held = true;
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[0]).click();
+    await tick(0);
+    expect($("result").textContent).toBe(
+      `Deleted ${CUSTOM[0]}; playlist now RYUO_IV_HW_Info_01.mp4, applies when the second display is off`,
+    );
+  });
+
+  it("a finished upload says it applies when the second display is off", async () => {
+    await openPage(makeDaemon({
+      upload: {
+        state: "done", file: "clip.mp4", name: "2026-10-24_12-00-00-000_clip.mp4", action: "copy", applied: false,
+        acked: false, heldByDisplay: true, startedAt: 1, progress: null,
+      },
+    }));
+    expect($("upStatus").textContent).toBe(
+      "Selected 2026-10-24_12-00-00-000_clip.mp4 (applies when the second display is off), sent as it was",
+    );
+  });
+});
+
 describe("Preview", () => {
   it("plays a Custom file in a muted, looping video when its thumbnail is clicked", async () => {
     await openPage();

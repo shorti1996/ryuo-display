@@ -70,6 +70,24 @@ describe("second display", () => {
     );
   });
 
+  it("warns when the black background could not be put on the cooler, until it clears", async () => {
+    const error = "adb push exited with 1: adb: error: no devices/emulators found";
+    const d = await openPage(makeDaemon({ display: { on: true, state: "on", fps: 59.8, mbps: 9.7, backgroundError: error } }));
+    expect(shown("displayBackground")).toBe(true);
+    expect($("displayBackground").textContent).toBe(
+      `Couldn't put the black background on the cooler: ${error}. While the panel shows the desktop, HomeUI's video plays under it and uses more of the cooler's decoder.`,
+    );
+    d.display = { ...d.display, backgroundError: null };
+    await tick(1000);
+    expect(shown("displayBackground")).toBe(false);
+    expect($("displayBackground").textContent).toBe("");
+  });
+
+  it("shows no background warning normally", async () => {
+    await openPage(makeDaemon({ display: { on: true, state: "on", fps: 59.8, mbps: 9.7 } }));
+    expect(shown("displayBackground")).toBe(false);
+  });
+
   it("hides the pointer line while off", async () => {
     await openPage(makeDaemon({ display: { on: false, state: "off", pointer: { shown: true, reason: null } } }));
     expect(shown("displayPointer")).toBe(false);

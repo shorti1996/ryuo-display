@@ -118,6 +118,7 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
 .mrow .size { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .mrow button.del { padding: 2px 10px; font-size: 12.5px; white-space: nowrap; }
 .mrow button.del.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
+.mrow .tag { flex: none; font-size: 11.5px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
 #mediaPreview { margin: 10px 0; }
 #mediaPreview video, #mediaPreview img { display: block; width: 100%; aspect-ratio: 2240 / 1080; object-fit: contain; background: #050506; border-radius: 8px; margin-top: 6px; }
 #mediaPreview [hidden] { display: none; }
@@ -135,6 +136,7 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
 }
 #displayRetry { margin-top: 8px; }
 #displayPointer { margin: 4px 0 0; color: var(--muted); }
+#displayBackground { margin: 4px 0 0; color: var(--bad); }
 @media (max-width: 520px) { .row { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
 </style>
 </head>
@@ -163,6 +165,7 @@ input[type=color] { width: 44px; height: 32px; padding: 2px; border: 1px solid v
       <div class="row"><span>Panel as monitor</span><label class="inline"><input type="checkbox" id="displayOn"> show a virtual monitor of the desktop on the panel</label></div>
       <p id="displayState" aria-live="polite"><span class="dot" id="displayDot"></span><span id="displayText">…</span></p>
       <p id="displayPointer" hidden></p>
+      <p id="displayBackground" hidden></p>
       <pre class="mono" id="displayErr" hidden></pre>
       <button id="displayRetry" type="button" hidden>Try again now</button>
       <p class="note">Adds a 2240×1080 virtual monitor, Virtual-RYUO, to the desktop. Windows dragged past the right edge of your main monitor appear on the panel. While it runs, the panel's stats overlay and background video are hidden; brightness still works. The panel gets a new frame only when something on the virtual monitor changes. Turning it off removes the virtual monitor, which takes up to about 10 s. Needs KDE Plasma on Wayland, krfb and an NVIDIA GPU. To show the mouse pointer on the panel, the desktop asks once which screen to share: choose Virtual-RYUO and allow restoring, so later starts skip the question.</p>
@@ -249,7 +252,8 @@ function say(text, bad) { $("result").textContent = text; $("result").style.colo
 function showResult(j, what) {
   if (j instanceof Error) { say(`${what}: ${j.message}`, true); return; }
   const sent = (j.sent || []).join(", ");
-  const how = j.applied === false ? "saved; the cooler is not connected, applied on reconnect"
+  const how = j.heldByDisplay ? "saved; applies when the second display is off"
+    : j.applied === false ? "saved; the cooler is not connected, applied on reconnect"
     : !sent ? "saved" : (j.acked ? "acked by the cooler" : "sent, no ack");
   say(`${what}: ${sent || "nothing sent"} — ${how}${j.restartsVideo ? " (video restarted)" : ""}`);
 }
@@ -383,6 +387,8 @@ async function sendPrefs(body) {
 
 /* ---------- media ---------- */
 const DELETE_ARMED_MS = 4000;  // how long "Really delete?" waits for the second click
+// The black still image ryuod puts under the second display (ryuod.BLACK_NAME).
+const DISPLAY_BLACK = "display-black.png";
 let armed = null;              // {button, timer} of the Delete button waiting for its second click
 let previewName = null;
 const mediaUrl = (kind, name) => `/api/media/${kind}?name=${encodeURIComponent(name)}`;
@@ -410,6 +416,8 @@ function renderMedia() {
       const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = name; cb.checked = chosen.includes(name);
       const s = document.createElement("span"); s.className = "mono"; s.textContent = name;
       l.append(cb, s);
+      const black = key === "custom" && name === DISPLAY_BLACK;
+      if (black) { const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = "second display"; l.append(tag); }
       // Presets live in /sdcard/pcMediaPreset, which mediaDelete cannot reach, and are not previewed.
       if (key === "preset") { box.append(l); continue; }
       const row = document.createElement("div"); row.className = "mrow";
@@ -423,7 +431,8 @@ function renderMedia() {
       const size = document.createElement("span"); size.className = "size"; size.textContent = fmtSize(sizes[name]);
       const del = document.createElement("button"); del.type = "button"; del.className = "del"; del.textContent = "Delete";
       del.setAttribute("aria-label", "Delete " + name);
-      del.addEventListener("click", () => deleteClick(name, del));
+      if (black) { del.disabled = true; del.title = "Used by the second display. Delete it from the stock app if needed."; }
+      else del.addEventListener("click", () => deleteClick(name, del));
       row.append(th, l, size, del); box.append(row);
     }
   }
@@ -456,7 +465,8 @@ async function deleteMedia(name) {
     renderMedia();
     if (j.remaining.length) { say(`Delete: ${j.remaining.join(", ")} is still on the cooler`, true); return; }
     let text = `Deleted ${j.deleted.join(", ")}`;
-    if (j.restartsVideo) text += `; playlist now ${j.config.media.join(", ")}${j.applied === false ? ", sent when the cooler reconnects" : ""}`;
+    const when = j.heldByDisplay ? ", applies when the second display is off" : j.applied === false ? ", sent when the cooler reconnects" : "";
+    if (j.restartsVideo || j.heldByDisplay) text += `; playlist now ${j.config.media.join(", ")}${when}`;
     say(text);
   } catch (e) { showResult(e, "Delete"); renderMedia(); }
 }
@@ -528,7 +538,8 @@ function renderUpload(u) {
     converting: (u.action === "remux" ? "Repackaging as MP4" : `Converting to 2240×1080 HEVC with ${u.encoder}`) + amount + (u.speed ? ` at ${u.speed}` : ""),
     pushing: "Copying to the cooler over adb…",
     starting: "Starting playback…",
-    done: `Playing ${u.name}${u.applied === false ? " once the cooler reconnects" : ""}, ${UP_DONE[u.action] || u.action}`,
+    done: (u.heldByDisplay ? `Selected ${u.name} (applies when the second display is off)`
+      : `Playing ${u.name}${u.applied === false ? " once the cooler reconnects" : ""}`) + `, ${UP_DONE[u.action] || u.action}`,
     error: `Upload failed: ${u.error}`,
     cancelled: "Upload cancelled",
   }[u.state] || u.state;
@@ -598,6 +609,11 @@ function renderDisplay(s) {
   $("displayPointer").textContent = !p ? "" : p.shown
     ? "Mouse pointer: shown on the panel."
     : `No mouse pointer on the panel: ${p.reason || "unknown reason"}. Turn the switch off and on to choose the screen again.`;
+  const bg = s && s.backgroundError;
+  $("displayBackground").hidden = !bg;
+  $("displayBackground").textContent = bg
+    ? `Couldn't put the black background on the cooler: ${bg}. While the panel shows the desktop, HomeUI's video plays under it and uses more of the cooler's decoder.`
+    : "";
   $("displayErr").hidden = !failed || !s.error;
   $("displayErr").textContent = failed && s.error ? s.error : "";
   $("displayRetry").hidden = !failed;

@@ -22,9 +22,11 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import threading
 import time
+import zlib
 
 PANEL_W, PANEL_H = 2240, 1080
 PANEL_ASPECT = PANEL_W / PANEL_H
@@ -425,6 +427,18 @@ def device_name(filename, now=None):
     stem = os.path.splitext(os.path.basename(filename or ""))[0]
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip(".-_")[:STEM_MAX].strip(".-_")
     return f"{stamp}_{stem}.mp4" if stem else f"{stamp}.mp4"
+
+
+def black_png(width=PANEL_W, height=PANEL_H):
+    """A black 8-bit RGB PNG, built with zlib alone. 2240x1080 compresses to about 7 kB."""
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    # Each row is filter type 0 (none) followed by width black pixels of 3 bytes.
+    rows = bytes(1 + 3 * width) * height
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # bit depth 8, colour type 2 (RGB)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b"")
 
 
 def push(src, name, media_dir, cancel=None):

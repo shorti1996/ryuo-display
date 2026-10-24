@@ -137,6 +137,9 @@ again. To be asked again on the next start, delete the token: `rm ~/.config/ryuo
   the last one.
 - Brightness keeps working, and the daemon keeps its heartbeat going. Without it the panel would drop
   to standby and to 50/255 backlight.
+- While it streams, the daemon swaps the background video for a black image, `display-black.png`, which
+  lets the cooler decode the desktop at up to about 90 frames/s instead of about 70. Your selected
+  background comes back when display mode stops.
 - Turning it off removes the virtual monitor, which takes up to about 10 s; windows on it move to the
   main monitor. The panel then shows the background video again.
 - The switch is saved in `state.json`. When the daemon starts with it on, display mode starts again,

@@ -186,6 +186,18 @@ def test_startup_uses_saved_state(rig):
     assert rig.device.ready
 
 
+def test_startup_while_the_second_display_streams_sends_the_black_image(rig):
+    rig.state.update({"media": ["a.mp4", "b.mp4"], "playMode": "Cycle"})
+    rig.device.backdrop = ryuod.Backdrop(None)
+    rig.device.backdrop.on = True
+    cooler = rig.attach()
+    rig.device.startup()
+    bodies = {c: b for _, c, b in cooler.wait_for(count("all", 1))}
+    assert bodies["waterBlockScreenId"] == ryuod.black_config(rig.state.get())
+    assert bodies["waterBlockScreenId"]["media"] == [ryuod.BLACK_NAME]
+    assert rig.state.get()["media"] == ["a.mp4", "b.mp4"]  # the user's selection stays saved
+
+
 def test_startup_skips_oversized_config_but_keeps_going(rig):
     rig.state.update({"media": ["x" * 1200]})
     cooler = rig.attach()
