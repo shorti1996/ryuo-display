@@ -1,7 +1,7 @@
 # Second display: KWin's slow capture cycle
 
-Status: investigated 2026-10-24. Cause found with high confidence; no fix committed. A slow-cycle
-detector exists uncommitted on branch `display-startup-restart` (see "Already implemented"). The
+Status: investigated 2026-10-24. Cause found with high confidence; no fix found. A slow-cycle
+detector that restarts the capture is committed on branch `display-startup-restart`. The
 proper cure is KWin 6.8.0 or later, which Fedora 43 does not ship.
 
 ## The short version
@@ -71,7 +71,8 @@ https://bugs.kde.org/show_bug.cgi?id=524129.
 Availability, checked 2026-10-24 on Bodhi: kwin 6.8.1 is pending for F45 and stable for F46 and
 ELN. There's nothing for F43 (updates and updates-testing hold only 6.7.5), and no COPR backport
 was found. Running 6.8 means upgrading the system to Fedora 45, which brings the whole Plasma 6.8
-stack.
+stack. Fedora 45's final release target is 2026-11-03 (fedorapeople.org f-45 schedule, checked
+2026-10-24).
 
 ## Tried, with results
 
@@ -79,7 +80,7 @@ stack.
 |---|---|
 | One capture restart 1 s after streaming starts | Still about 6 fps; a manual restart 2.5 min later fixed it. Reverted. |
 | One capture restart 3 s after streaming starts | Still about 6 fps. Reverted. |
-| SlowCycle detector restarting on the signature (uncommitted) | Detects the cycle 2.5–3.4 s after the first frame. On its own, 3 restarts at 3, 7 and 13 s all fell back into the 500 ms cycle (15:41). |
+| SlowCycle detector restarting on the signature (committed) | Detects the cycle 2.5–3.4 s after the first frame. On its own, 3 restarts at 3, 7 and 13 s all fell back into the 500 ms cycle (15:41). |
 | `stream-properties=props,stream.is-live=false` on pipewiresrc | Slow cycle in 1 of 3 starts (20 s in; one detector restart cleared it). But frames are unpaced: up to 102 fps sent, more than the cooler decodes, and the panel lagged. Reverted. PipeWire did report `stream.is-live: FALSE`, so the property reached the stream; the remaining slow start comes from a path not yet identified. |
 | `is-live=false` plus caps filter `video/x-raw(memory:DMABuf),max-framerate=60/1;video/x-raw,max-framerate=60/1` after pipewiresrc | `pw-dump` showed the negotiated `maxFramerate 60/1`, yet the PC still sent 97–102 fps (5 s windows), and the user saw lag. Slow cycle in 2 of 3 starts; in one start, 3 detector restarts all fell back into the 500 ms cycle. Reverted. (`video/x-raw(ANY),…` fails with "No supported formats found", because pipewiresrc's template is ANY.) |
 
@@ -88,7 +89,7 @@ stack.
 - **Black background during display mode:** done and committed (`2369dfa`, branch
   `display-black-background`, not merged into main).
 - **Self-healing on the slow-cycle signature:** the user asked for it; it's implemented as the
-  uncommitted SlowCycle detector with a cooldown and a cap.
+  SlowCycle detector with a cooldown and a cap, committed on `display-startup-restart`.
 - **Tried and failed:** a non-live pipewiresrc with frames capped at 60 fps (see "Tried, with
   results"). No workaround in the GStreamer pipeline is known to work; the remaining candidates are
   in "Open questions".
@@ -97,8 +98,8 @@ stack.
 
 | Step | Ships alone? |
 |---|---|
-| 1. Decide whether to keep the SlowCycle detector: it recognises the cycle reliably, but its restarts cleared it only some of the time (once at 15:44; never in the 15:41 and 15:53 starts), and each restart pauses the panel for about 80 ms | Yes |
-| 2. Remove the temporary `RYUO_FRAME_LOG` hook, or turn it into a documented debug option | With step 1 |
+| 1. Done 2026-10-24: the SlowCycle detector is committed as a safety net (hook removed). Its restarts clear the cycle only some of the time (once at 15:44; never in the 15:41 and 15:53 starts); each costs an 80 ms pause during a phase already at 6 fps | — |
+| 2. Merge `display-black-background` and `display-startup-restart` into main when the user asks | Yes |
 | 3. When the system moves to Fedora 45 / KWin ≥ 6.8: re-measure with the harness (success criteria 1–3) | Later; expected to be the real fix |
 | 4. Until then, the only workaround known to work is a window that keeps drawing on the panel when the stream starts (for example a playing video). A tiny always-drawing surface placed by the tool is untested. | Optional |
 
@@ -107,11 +108,11 @@ stack.
 | Path | Why it matters |
 |---|---|
 | `ryuo_display.py:222` `gst_cmd` | The pipewiresrc pipeline; workaround properties go here |
-| `ryuo_display.py:438` `Relay`, `:481` | Sends each encoded frame; the temporary frame-log hook is at :481 (working tree only) |
+| `ryuo_display.py:438` `Relay` | Sends each encoded frame; `_run` is where the frame-log hook goes while measuring |
 | `ryuo_display.py:529` | Comment block on the 2026-10-23 slow capture of arriving windows (same bug, first sighting) |
-| `ryuo_display.py:869-960` | "KWin's slow capture cycle" comment, `SLOW_*` constants, `SlowCycle`, `SlowRestarts` (uncommitted) |
-| `ryuo_display.py:1233` `start_stream`, `:1305` `switch_to`, `:1373` `restart_capture`, `:1393` `watch` | Stream start, what a restart does, and where the detector triggers restarts |
-| `tests/test_display.py` | Detector tests, with fixtures cut from the 2026-10-24 recordings (uncommitted) |
+| `ryuo_display.py:865-980` | "KWin's slow capture cycle" comment, `SLOW_*` constants, `SlowCycle`, `SlowRestarts` |
+| `ryuo_display.py:1235` `start_stream`, `:1307` `switch_to`, `:1375` `restart_capture`, `:1395` `watch` | Stream start, what a restart does, and where the detector triggers restarts |
+| `tests/test_display.py` | Detector tests, with fixtures cut from the 2026-10-24 recordings |
 | `docs/006-second-display-slow-capture/capture_harness.py` | The measurement harness (copy of the one used on 2026-10-24) |
 | `docs/future-work/todo.md` | The stutter entry this doc resolves; update it when a fix ships |
 
@@ -130,8 +131,10 @@ stack.
   then poll `GET /api/state` until `display.state` is `off`, then send `{"on":true}`.
 - The harness toggles display mode and opens a test window titled `ryuo-probe` on the user's
   desktop: ask the user before running it, and ask them to keep off the panel. It needs the
-  `RYUO_FRAME_LOG` hook in `Relay._run`. The hook is 3 lines: open the file named by the variable
-  at the top of `_run`, then write `f"{time.monotonic():.4f} {len(data)}\n"` after each `sendall`.
+  `RYUO_FRAME_LOG` hook in `Relay._run`, which was removed before the detector was committed; add
+  it back while measuring. The hook is 3 lines: at the top of `_run`,
+  `frame_log = open(os.environ["RYUO_FRAME_LOG"], "a", buffering=1) if os.environ.get("RYUO_FRAME_LOG") else None`,
+  and after `self.first_frame.set()`, `if frame_log is not None: frame_log.write(f"{time.monotonic():.4f} {len(data)}\n")`.
 - The user judges smoothness by eye; sent fps alone is ambiguous, because a still desktop sends
   about 6 fps too.
 

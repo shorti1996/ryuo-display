@@ -3,7 +3,10 @@
 
 A 60 fps test pattern (ffplay, window title ryuo-probe) is moved around by KWin scripts while
 ryuo_display.py runs with RYUO_FRAME_LOG set, so every frame sent to the panel is timestamped.
+ryuo_display.py does not read RYUO_FRAME_LOG on its own: add the hook described in
+001_problem_and_handoff.md ("How to work") before running this.
 """
+import itertools
 import json
 import os
 import signal
@@ -76,7 +79,7 @@ def frames_between(t0, t1):
     with open(FRAMES) as f:
         ts = [float(line.split()[0]) for line in f if line.strip()]
     ts = [t for t in ts if t0 <= t < t1]
-    gaps = [b - a for a, b in zip(ts, ts[1:])]
+    gaps = [b - a for a, b in itertools.pairwise(ts)]
     return {"fps": round(len(ts) / (t1 - t0), 1), "max_gap_ms": round(max(gaps) * 1000) if gaps else None,
             "burst_share": round(sum(1 for g in gaps if g < 0.004) / len(gaps), 2) if gaps else None}
 
@@ -93,7 +96,7 @@ class Display:
     def __init__(self, trial):
         self.lines = []
         env = dict(os.environ, RYUO_FRAME_LOG=FRAMES)
-        self.out = open(os.path.join(OUT, f"display-{trial}.log"), "w")
+        self.out = open(os.path.join(OUT, f"display-{trial}.log"), "w")  # noqa: SIM115 (closed in stop())
         self.proc = subprocess.Popen([sys.executable, "-u", os.path.join(REPO, "ryuo_display.py")], env=env,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         threading.Thread(target=self._read, daemon=True).start()
