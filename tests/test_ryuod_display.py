@@ -124,6 +124,7 @@ def test_off_until_switched_on(fake, displays):
         "message": None,
         "error": None,
         "pointer": None,
+        "backgroundError": None,
         "retryInS": None,
     }
 

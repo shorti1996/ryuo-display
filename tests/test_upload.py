@@ -120,6 +120,7 @@ def test_compatible_file_is_pushed_unchanged_and_played(daemon, tmp_path):
     assert status == 202, j
     u = wait_done(daemon)
     assert (u["state"], u["action"], u["applied"], u["acked"]) == ("done", "copy", True, True), u
+    assert u["heldByDisplay"] is False
     name = u["name"]
     assert name.endswith("_asus.mp4")
     assert (daemon.adb_root / "device/sdcard/pcMedia" / name).read_bytes() == data
@@ -129,6 +130,18 @@ def test_compatible_file_is_pushed_unchanged_and_played(daemon, tmp_path):
     assert name in daemon.device.media["custom"]
     assert daemon.device.media["sizes"][name] == len(data)
     assert os.listdir(daemon.upload_dir) == []  # job files removed
+
+
+@needs_ffmpeg
+def test_upload_while_the_second_display_streams_is_selected_without_sending(daemon, tmp_path):
+    daemon.backdrop.on = True
+    data = make_clip(tmp_path / "asus.mp4", "1920x926", 1, "-c:v", "libx264", "-pix_fmt", "yuv420p")
+    assert upload(daemon, data, "asus.mp4")[0] == 202
+    u = wait_done(daemon)
+    assert (u["state"], u["heldByDisplay"], u["applied"]) == ("done", True, False), u
+    assert daemon.device.sent == []
+    assert daemon.state.get()["media"] == [u["name"]]  # plays once the second display stops
+    assert u["name"] in daemon.device.media["custom"]
 
 
 @needs_ffmpeg

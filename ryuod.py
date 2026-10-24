@@ -9,7 +9,7 @@ page is converted on an upload thread when the panel cannot play it as it is (ry
 pushed with adb and played. Files in /sdcard/pcMedia can be deleted from the page, and previewed
 there from copies pulled with adb: a thumbnail, and an H.264 proxy for the HEVC files Chrome
 cannot decode. While the second-display switch is on, ryuo_display.py runs as a child process and
-shows a virtual monitor of the desktop on the panel.
+shows a virtual monitor of the desktop on the panel, with HomeUI on a black still image under it.
 """
 import argparse
 import collections
@@ -49,6 +49,9 @@ PREVIEW_CAP = 500 * 2**20   # bytes of pulled files, thumbnails and proxies kept
 MAX_MEDIA = 20
 MAX_DELETE = 100            # names in one POST /api/media/delete
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+# What HomeUI shows under the second display (class Backdrop). HomeUI plays a .mp4 name as video
+# and any other name as a still image.
+BLACK_NAME = "display-black.png"
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 LATE_ACK_S = 1.5   # a command's ack can queue behind HomeUI's slower POST all ack
 COLOR_RE = re.compile(r"#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})")
@@ -271,6 +274,11 @@ def overlay_settings(st):
 
 def config_for(st):
     return P.screen_config(st["media"], st["playMode"], st["ratio"], shown_items(st), overlay_settings(st))
+
+
+def black_config(st):
+    """config_for(st) with BLACK_NAME as the whole playlist."""
+    return P.screen_config([BLACK_NAME], "Single", st["ratio"], shown_items(st), overlay_settings(st))
 
 
 def fitted_config(st):
@@ -624,6 +632,7 @@ class Device(threading.Thread):
         # Jobs whose ack missed call()'s window: ack number -> (futures, result, monotonic deadline).
         self.pending = {}
         self.last_seq = 0
+        self.backdrop = None        # Backdrop; while its switch is on, startup sends BLACK_NAME
 
     # -- called from HTTP threads
 
@@ -754,6 +763,9 @@ class Device(threading.Thread):
         # isBlockScreen gates brightness; without this the brightness step is ignored
         self.call("POST", "waterBlockScreen", {"enable": True}, wait=0.3)
         cfg, dropped = fitted_config(st)
+        if self.backdrop is not None and self.backdrop.on:
+            # The second display is streaming: HomeUI stays on the black image under it.
+            cfg, dropped = black_config(st), 0
         if dropped:
             log(f"device: playlist too long for one HID report; playing the first {len(cfg['media'])}"
                 f" of {len(st['media'])} files")
@@ -984,14 +996,20 @@ class Display(threading.Thread):
     A failed start is retried after DISPLAY_BACKOFF; a child that streamed and then exited starts
     the backoff over. Failures in DISPLAY_PERMANENT (or exit status 2: usage error, script not
     found) are not retried until set(True) is called again or `cooler()`, a value that changes
-    when the cooler reconnects (None while it is disconnected), changes."""
+    when the cooler reconnects (None while it is disconnected), changes.
 
-    def __init__(self, cmd=None, environ=None, cooler=lambda: None, backoff=DISPLAY_BACKOFF, stop_s=DISPLAY_STOP_S):
+    With a `backdrop` (class Backdrop), HomeUI is switched to a black image once the child reports
+    "streaming to the panel", and back to the saved media before a child is stopped or after it
+    exits on its own."""
+
+    def __init__(
+        self, cmd=None, environ=None, cooler=lambda: None, backoff=DISPLAY_BACKOFF, stop_s=DISPLAY_STOP_S, backdrop=None
+    ):
         super().__init__(daemon=True, name="display")
         python = DISPLAY_PYTHON if os.path.exists(DISPLAY_PYTHON) else sys.executable
         self.cmd = cmd or [python, "-u", DISPLAY_SCRIPT]
         self.environ = os.environ if environ is None else environ
-        self.cooler, self.backoff, self.stop_s = cooler, backoff, stop_s
+        self.cooler, self.backoff, self.stop_s, self.backdrop = cooler, backoff, stop_s, backdrop
         self.cond = threading.Condition()
         self.want = False
         self.quit = False
@@ -1003,7 +1021,12 @@ class Display(threading.Thread):
         self.terminating = False  # SIGTERM sent to the current child
         self.resume_state = None  # the state set(False) replaced with "stopping"
         self.tail = collections.deque(maxlen=DISPLAY_TAIL)
-        self.st = {"state": "off", "fps": None, "mbps": None, "message": None, "error": None, "pointer": None}
+        # backgroundError: why HomeUI could not be switched to the black image; kept through retries
+        # until a switch succeeds or the switch is turned off.
+        self.st = {
+            "state": "off", "fps": None, "mbps": None, "message": None, "error": None, "pointer": None,
+            "backgroundError": None,
+        }
 
     # -- called from HTTP threads and main()
 
@@ -1058,7 +1081,9 @@ class Display(threading.Thread):
             while not self.quit:
                 if not self.want:
                     self.retry_at = self.blocked = None
-                    self.st.update(state="off", fps=None, mbps=None, message=None, error=None, pointer=None)
+                    self.st.update(
+                        state="off", fps=None, mbps=None, message=None, error=None, pointer=None, backgroundError=None
+                    )
                     self.cond.wait()
                     continue
                 if self.blocked is not None:
@@ -1100,19 +1125,31 @@ class Display(threading.Thread):
             self.proc = proc
         reader = threading.Thread(target=self.read, args=(proc,), daemon=True, name="display-output")
         reader.start()
-        stopped = False
+        stopped = black = False
         while proc.poll() is None:
             with self.cond:
                 stopped = self.terminating = self.quit or not self.want
-                if not stopped:
+                switch = not black and self.backdrop is not None and self.st["state"] == "on"
+                if not stopped and not switch:
                     self.cond.wait(0.25)
             if stopped:
+                if black:
+                    # Before the child stops: the receiver's layer still covers HomeUI, so its video
+                    # starts out of sight instead of after a black panel during the stop (up to 10 s).
+                    black = False
+                    self.backdrop.restore()
                 self.terminate(proc)
                 break
+            if switch:
+                # Pushes over adb first; turning the switch off meanwhile takes effect after the push.
+                black = True
+                self.update(backgroundError=self.backdrop.black())
         reader.join(2)
         with self.cond:
             self.proc, self.terminating = None, False
             streamed = self.st["state"] == "on"  # reached "streaming to the panel" before it exited
+        if black:
+            self.backdrop.restore()
         if stopped:
             log(f"display: ryuo_display.py stopped (status {proc.returncode})")
             return None
@@ -1149,6 +1186,7 @@ class Display(threading.Thread):
                     self.st["message"] = line
                 if line.startswith("streaming to the panel") and self.st["state"] == "starting":
                     self.st["state"] = "on"
+                    self.cond.notify_all()  # run_child switches HomeUI to the black image
             quiet = m or DISPLAY_RECEIVER_FPS_RE.fullmatch(line.strip())
             if line.strip() and (not quiet or VERBOSE):
                 log(f"display: {line}")
@@ -1169,6 +1207,84 @@ class Display(threading.Thread):
                 self.st.update(state="retrying", error=error, fps=None, mbps=None, message=None, pointer=None)
         then = "not retried until the switch is turned on again or the cooler reconnects" if permanent else None
         log(f"display: {error}; {then or f'retrying in {delay} s'}")
+
+
+BLACK_PUSH_S = 30  # s the adb push of BLACK_NAME may take before the switch to it is given up
+
+
+class Backdrop:
+    """Holds HomeUI on a black still image (BLACK_NAME) while the second display streams.
+
+    HomeUI keeps decoding its video under the receiver's layer, and the cooler's decoder then
+    reaches about 70 fps instead of about 90 fps over a still image. Display calls black() once
+    ryuo_display.py streams, and restore() before it stops the child or after the child exits.
+
+    The switch lives in memory only: state["media"] stays the user's selection, so after a crash or
+    reboot HomeUI plays it again. While the switch is on, Device.startup sends BLACK_NAME, and the
+    other senders of waterBlockScreenId save the user's selection without sending it (submit())."""
+
+    def __init__(self, d):
+        self.d = d
+        self.lock = threading.Lock()  # held from reading `on` to queueing the frame that depends on it
+        self.on = False
+
+    def black(self):
+        """Push BLACK_NAME to /sdcard/pcMedia and switch HomeUI to it. Runs on the display thread,
+        so the device worker keeps its heartbeat going during the push. Returns None, or the adb
+        error when the push failed; HomeUI then keeps playing the saved media."""
+        d = self.d
+        data = M.black_png()
+        cancel = M.Cancel()
+        timer = threading.Timer(BLACK_PUSH_S, cancel.cancel)
+        try:
+            # media_lock: the push and the list update cannot interleave with a delete.
+            with tempfile.TemporaryDirectory(prefix="ryuo-black-") as tmp, d.media_lock:
+                src = os.path.join(tmp, BLACK_NAME)
+                with open(src, "wb") as f:
+                    f.write(data)
+                timer.start()
+                M.push(src, BLACK_NAME, P.MEDIA_DIR, cancel)
+                dev = d.device
+                custom = dev.media["custom"] if BLACK_NAME in dev.media["custom"] else [*dev.media["custom"], BLACK_NAME]
+                dev.media = {**dev.media, "custom": custom,
+                             "sizes": {**(dev.media.get("sizes") or {}), BLACK_NAME: len(data)}}
+        except M.Cancelled:
+            error = f"adb push did not finish within {BLACK_PUSH_S} s"
+        except (M.MediaError, OSError) as e:
+            error = str(e)
+        else:
+            error = None
+        finally:
+            timer.cancel()
+        if error:
+            log(f"display: could not push {BLACK_NAME} ({error}); HomeUI's video keeps playing under the display")
+            return error
+        with self.lock:
+            self.on = True
+            d.device.submit("POST", "waterBlockScreenId", black_config(d.state.get()), 1.0)
+        log(f"display: HomeUI switched to {BLACK_NAME}")
+        return None
+
+    def restore(self):
+        """Switch HomeUI back to the saved media if black() switched it away. Waits for the device
+        worker to send it, so the daemon's shutdown can follow it with disconn."""
+        with self.lock:
+            if not self.on:
+                return
+            self.on = False
+            cfg, _ = fitted_config(self.d.state.get())
+            fut = self.d.device.submit("POST", "waterBlockScreenId", cfg, 1.0)
+        log("display: HomeUI switched back to the saved media")
+        job_result(fut)
+
+    def submit(self, cfg, wait=1.0):
+        """Queue the user's waterBlockScreenId on the device worker: (future, False). While HomeUI
+        is held on BLACK_NAME, nothing is queued and this returns (None, True); restore() sends the
+        saved selection later."""
+        with self.lock:
+            if self.on:
+                return None, True
+            return self.d.device.submit("POST", "waterBlockScreenId", cfg, wait), False
 
 
 # ---------------------------------------------------------------- HTTP
@@ -1279,6 +1395,8 @@ def check_delete(dev, names):
     for n in names:
         if not bare_name(n):
             raise Invalid(f"{n!r} is not a bare file name")
+        if n == BLACK_NAME:
+            raise Invalid(f"{n} is used by the second display; delete it from the stock app if needed")
         if n in dev.media["preset"]:
             raise Invalid(f"{n} is a preset; only files in /sdcard/pcMedia can be deleted")
         if n not in dev.media["custom"]:
@@ -1355,19 +1473,24 @@ def delete_media(d, names):
     st = d.state.get()
     playlist = [m for m in st["media"] if m not in deleted]
     restarts = playlist != st["media"]
+    held = False
     if restarts:
         # HomeUI skips a missing file and retries it every 3 s, and with none left it plays nothing.
         st = d.state.update({"media": playlist or dev.first_preset()})
         cfg, _ = fitted_config(st)
-        fut = dev.submit("POST", "waterBlockScreenId", cfg, 1.0)
-        # Saved either way; the startup sequence sends it on reconnect.
-        last = {"applied": False, "acked": False}
-        if fut is not None:
-            last = job_result(fut) or {"applied": True, "acked": False}
-        sent.append("POST waterBlockScreenId")
+        fut, held = d.backdrop.submit(cfg, 1.0)
+        if held:
+            # Saved only; HomeUI stays on the black image until the second display stops.
+            restarts = False
+        else:
+            # Saved either way; the startup sequence sends it on reconnect.
+            last = {"applied": False, "acked": False}
+            if fut is not None:
+                last = job_result(fut) or {"applied": True, "acked": False}
+            sent.append("POST waterBlockScreenId")
     return {"deleted": deleted, "remaining": left, "listedBy": listed, "sent": sent,
             "applied": last.get("applied", False), "acked": last.get("acked", False), "restartsVideo": restarts,
-            "config": public_config(st), "media": dict(dev.media)}
+            "heldByDisplay": held, "config": public_config(st), "media": dict(dev.media)}
 
 
 # ---------------------------------------------------------------- video upload
@@ -1397,7 +1520,7 @@ class Upload(threading.Thread):
         self.status = {"state": "receiving", "file": os.path.basename(filename) or None, "bytes": length,
                        "received": 0, "progress": 0.0, "speed": None, "action": None, "reason": None,
                        "encoder": None, "name": None, "error": None, "applied": None, "acked": None,
-                       "startedAt": int(time.time() * 1000), "finishedAt": None}
+                       "heldByDisplay": None, "startedAt": int(time.time() * 1000), "finishedAt": None}
 
     def snapshot(self):
         with self.lock:
@@ -1465,19 +1588,20 @@ class Upload(threading.Thread):
         self.set(state="pushing", progress=None, speed=None, name=name)
         M.push(out, name, P.MEDIA_DIR, self.cancel_)
         dev = self.d.device
-        dev.media = {**dev.media, "custom": [*dev.media["custom"], name],
-                     "sizes": {**(dev.media.get("sizes") or {}), name: os.path.getsize(out)}}
+        with self.d.media_lock:
+            dev.media = {**dev.media, "custom": [*dev.media["custom"], name],
+                         "sizes": {**(dev.media.get("sizes") or {}), name: os.path.getsize(out)}}
         self.set(state="starting")
         cfg, _ = select_playlist(self.d, [name], "Single")
-        fut = dev.submit("POST", "waterBlockScreenId", cfg, 1.0)
+        fut, held = self.d.backdrop.submit(cfg, 1.0)
         res = {"applied": False, "acked": False}  # saved; the startup sequence sends it on reconnect
         if fut is not None:
             try:
                 res = fut.result(3)
             except concurrent.futures.TimeoutError:
                 res = {"applied": True, "acked": False}
-        self.set(state="done", applied=res.get("applied"), acked=res.get("acked"))
-        log(f"upload: playing {name}")
+        self.set(state="done", applied=res.get("applied"), acked=res.get("acked"), heldByDisplay=held)
+        log(f"upload: selected {name}; plays when the second display stops" if held else f"upload: playing {name}")
 
 
 # ---------------------------------------------------------------- previews of device media
@@ -1813,7 +1937,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def apply(self, method, cmd, body, wait=0.25):
         """Send through the worker. Returns the response fields, or None after a 504."""
-        fut = self.d.device.submit(method, cmd, body, wait)
+        return self.result(self.d.device.submit(method, cmd, body, wait))
+
+    def result(self, fut):
+        """The response fields for a worker job (fut None: the cooler is disconnected), or None
+        after replying with the error."""
         if fut is None:
             return {"applied": False, "acked": False}
         try:
@@ -1859,10 +1987,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         mode = body.get("playMode", self.d.state.get()["playMode"])
         cfg, st = select_playlist(self.d, media, mode)
         # The ack follows HomeUI's config handling and lands after the usual 250 ms window.
-        res = self.apply("POST", "waterBlockScreenId", cfg, wait=1.0)
+        fut, held = self.d.backdrop.submit(cfg, wait=1.0)
+        if held:
+            # Saved only; HomeUI stays on the black image until the second display stops.
+            return self.reply(200, {"ok": True, "applied": False, "acked": False, "heldByDisplay": True, "sent": [],
+                                    "restartsVideo": False, "config": public_config(st)})
+        res = self.result(fut)
         if res is not None:
-            self.reply(200, {"ok": True, **res, "sent": ["POST waterBlockScreenId"], "restartsVideo": True,
-                             "config": public_config(st)})
+            self.reply(200, {"ok": True, **res, "heldByDisplay": False, "sent": ["POST waterBlockScreenId"],
+                             "restartsVideo": True, "config": public_config(st)})
 
     def post_upload(self, query):
         """Stream the body to a file under the cache dir, then probe, convert, push and play it
@@ -1978,8 +2111,11 @@ class Daemon:
     upload_lock = threading.Lock()
     upload_dir = default_upload_dir()
     preview = Previews(default_preview_dir())
-    media_lock = threading.Lock()   # one delete at a time
+    media_lock = threading.Lock()   # one delete, or one change to device.media from a push, at a time
     display = None              # Display, the second-display supervisor
+
+    def __init__(self):
+        self.backdrop = Backdrop(self)
 
 
 def is_ryuod(pid):
@@ -2037,10 +2173,13 @@ def main():
     d.sampler = Sampler(d.state)
     d.sampler.start()
     d.device = Device(d.state, d.sampler, a.heartbeat)
+    d.device.backdrop = d.backdrop
     d.device.start()
     # The cooler token changes when the device worker reconnects, which re-arms a second display
     # that stopped on a permanent error such as "no cooler on adb".
-    d.display = Display(cooler=lambda: d.device.recoveries if d.device.status()["connected"] else None)
+    d.display = Display(
+        cooler=lambda: d.device.recoveries if d.device.status()["connected"] else None, backdrop=d.backdrop
+    )
     d.display.start()
     if d.state.get()["secondDisplay"]:
         log("display: switch saved on; starting the second display")
@@ -2062,7 +2201,8 @@ def main():
     # can take about 10 s to stop.
     httpd.server_close()
     # Stopped before the device worker, so the heartbeat keeps HomeUI out of standby while the
-    # receiver on the cooler releases its decoder and exits.
+    # receiver on the cooler releases its decoder and exits, and the saved media replaces the black
+    # image (Backdrop.restore) before disconn.
     if d.display.status()["state"] != "off":
         log("display: stopping the second display")
     if not d.display.stop(DISPLAY_STOP_S + 5):

@@ -29,6 +29,8 @@ What runs, in start order (teardown goes in reverse):
   6. A KWin script reports windows that come onto the output, and the tool then restarts KWin's
      stream with a fresh encoder (see "windows arriving on the output" below): on KWin 6.7.5 such
      windows are otherwise captured at about 1 frame/s, with either stream.
+  7. When the times of the frames sent show KWin capturing in its slow cycle of 3 frames every
+     100-500 ms, the tool restarts KWin's stream the same way (see "KWin's slow capture cycle").
 
 KWin sends a frame only when something on the virtual output changes: a still desktop sends
 nothing and the panel keeps the last frame.
@@ -440,7 +442,10 @@ class Relay:
     encoder still had in flight are dropped instead of delaying the new encoder's first frame, and
     the old encoder, which can take a second to shut down, gets EPIPE on its next write. The new
     encoder starts with its own parameter sets and keyframe, which the panel's decoder takes
-    mid-stream. first_frame is set when the first frame read from the current pipe has been sent."""
+    mid-stream. first_frame is set when the first frame read from the current pipe has been sent.
+
+    slow_cycle is the cycle length in ms while the current pipe's frames show KWin's slow capture
+    cycle (see SlowCycle), else None. The SlowCycle is fed and reset on this thread only."""
 
     def __init__(self, sock, stats, on_error):
         self.sock, self.stats, self.on_error = sock, stats, on_error
@@ -448,6 +453,8 @@ class Relay:
         self.fd = None
         self.closed = False
         self.first_frame = threading.Event()
+        self.slow = SlowCycle()
+        self.slow_cycle = None
         self.wake_r, self.wake_w = os.pipe()
         self.thread = threading.Thread(target=self._run, daemon=True)
 
@@ -458,6 +465,7 @@ class Relay:
         with self.lock:
             self.fd = fd
             self.first_frame.clear()
+            self.slow_cycle = None
         os.write(self.wake_w, b"x")
 
     def close(self):
@@ -481,6 +489,9 @@ class Relay:
                     if current is not None:
                         os.close(current)
                     current, reader = fd, GdpReader()
+                    # A new encoder's frames say nothing yet about the cycle of the old one's.
+                    self.slow.reset()
+                    self.slow_cycle = None
                 ready = select.select([self.wake_r] + ([current] if current is not None else []), [], [])[0]
                 if self.wake_r in ready:
                     os.read(self.wake_r, 64)
@@ -499,6 +510,7 @@ class Relay:
                         data = panel_frame(payload)
                         self.sock.sendall(data)
                         self.stats.add(len(data))
+                        self.slow_cycle = self.slow.frame(time.monotonic())
                         self.first_frame.set()
         except (OSError, ValueError) as e:
             self.on_error(f"stream to the panel failed: {e}")
@@ -517,7 +529,8 @@ class Relay:
 # A plain pipewiresrc ! fakesink consumer sees the same rate, so the encoder is not the cause.
 # Windows that were on the output when the stream last went from paused to streaming are captured
 # at 56-60 frames/s. So the tool restarts the stream after a window arrives: a KWin script reports
-# arrivals over D-Bus, and restart_capture() swaps in a new encoder.
+# arrivals over D-Bus, and restart_capture() swaps in a new encoder. A stream can also start slow
+# with no window arriving at all; "KWin's slow capture cycle" below covers that case.
 
 DBUS_IFACE = "org.rogryuolcd.Display"
 DBUS_PATH = "/org/rogryuolcd/Display"
@@ -849,6 +862,127 @@ class RestartTimer:
             return False
 
 
+# ---------------------------------------------------------------- KWin's slow capture cycle
+
+# Works around more KWin 6.7.5 behaviour, measured on the development PC (2026-10-24) from the time
+# each frame was sent to the panel. Right after the stream starts, with the user's windows already
+# on the output and none arriving, KWin can capture in a fixed cycle of 3 frames every 500 ms, about
+# 6 frames/s: the gaps between frames ran 407, 1, 92, 407, 1, 92 ms (399, 17, 84 ms in another run)
+# and stayed so while the pointer moved across the output. One restart took a stream to a faster
+# form of the same cycle, 3 frames every 100 ms (gaps of 16, 17, 67 ms, about 30 frames/s); a second
+# restart brought it to 60 frames/s. No window arrives, so RestartTimer never asks for these
+# restarts: SlowCycle recognises the cycle from the frame times and watch() calls restart_capture().
+# The restarts clear the cycle only some of the time: in other starts that day, 3 restarts in a row
+# each fell back into the 500 ms cycle. The likely cause is that KWin stamps frames with the
+# output's last repaint time, and a live pipewiresrc holds every frame for as long as the first
+# one was stale; KWin 6.8.0 timestamps frames at capture time. Making pipewiresrc not live
+# (stream.is-live=false) left frames unpaced at up to 102 frames/s, more than the panel decodes,
+# even with max-framerate=60/1 negotiated. docs/006-second-display-slow-capture/ has the details.
+#
+# SlowCycle matches gaps that repeat with a period of 3 frames (each gap within SLOW_TOLERANCE of the
+# gap 3 frames earlier) over SLOW_CYCLES cycles, where a cycle lasts SLOW_MIN_CYCLE or longer and its
+# longest gap exceeds its shortest by SLOW_MIN_SPREAD or more. An app's steady cadence on the 60 Hz
+# output can also repeat every 3 frames (45 frames/s as 17, 17, 33 ms; 36 frames/s as 17, 33, 33
+# ms), but its gaps differ by one refresh interval (17 ms) at most, and at 45 frames/s the cycle
+# lasts 67 ms. A uniform cadence (60 frames/s, a 30 frames/s video, a cursor blinking every 500 ms)
+# has no spread, and an idle desktop sends no frames to match. In two recordings (12,900 frames),
+# the 60 frames/s phases repeated with a period of 3 frames only in cycles of 57 ms or shorter; the
+# slow cycles matched at 99 ms or longer, with a spread of 50 ms or more and gaps that repeated to
+# within 7 ms. The 500 ms cycle was recognised 2.5-3.4 s after the first frame, the 100 ms cycle 0.5 s
+# after the restart.
+#
+# A restart leaves the panel without new frames for about 80 ms. A slow-cycle restart waits
+# SLOW_COOLDOWN s after any restart, so the new stream shows its own cadence first, and at most
+# SLOW_RESTART_LIMIT of them happen within SLOW_RESTART_PERIOD s, so a stream that stays slow
+# whatever the tool does gets a few restarts a minute instead of one every few seconds.
+
+SLOW_FRAMES = 3  # frames per cycle of KWin's slow capture (KWin cycles 3 buffers)
+SLOW_CYCLES = 3  # consecutive cycles with matching gaps before the capture counts as slow
+SLOW_TOLERANCE = 10  # ms a gap may differ from the gap one cycle earlier
+SLOW_MIN_CYCLE = 80  # ms; shorter cycles are an app's own cadence
+SLOW_MIN_SPREAD = 33  # ms from the shortest to the longest gap of a cycle: two 60 Hz refresh intervals
+SLOW_COOLDOWN = 3  # s after any restart before the slow cycle may cause another
+SLOW_RESTART_LIMIT = 3  # slow-cycle restarts allowed within SLOW_RESTART_PERIOD
+SLOW_RESTART_PERIOD = 60  # s
+
+
+class SlowCycle:
+    """Recognises KWin's slow capture cycle from the times frames are sent. frame(t) takes a frame's
+    time in monotonic s and returns the cycle length in ms while the last cycles * period gaps show
+    the cycle, else None. reset() forgets every frame. Not thread-safe: one thread feeds it."""
+
+    def __init__(
+        self,
+        period=SLOW_FRAMES,
+        cycles=SLOW_CYCLES,
+        tolerance=SLOW_TOLERANCE,
+        min_cycle=SLOW_MIN_CYCLE,
+        min_spread=SLOW_MIN_SPREAD,
+    ):
+        self.period, self.tolerance, self.min_cycle, self.min_spread = period, tolerance, min_cycle, min_spread
+        self.gaps = collections.deque(maxlen=period * cycles)  # ms
+        self.last = None
+
+    def reset(self):
+        self.gaps.clear()
+        self.last = None
+
+    def frame(self, t):
+        if self.last is not None:
+            self.gaps.append((t - self.last) * 1000)
+        self.last = t
+        g, p = self.gaps, self.period
+        if len(g) < g.maxlen:
+            return None
+        cycle = [g[i] for i in range(len(g) - p, len(g))]
+        length = sum(cycle)
+        if length < self.min_cycle or max(cycle) - min(cycle) < self.min_spread:
+            return None
+        if any(abs(g[i] - g[i + p]) > self.tolerance for i in range(len(g) - p)):
+            return None
+        return length
+
+
+class SlowRestarts:
+    """Decides whether the slow cycle may restart the stream now: not within cooldown s of any
+    restart (restarted() notes one, and the stream's start counts as one), and at most limit times
+    within period s. When the limit first holds a restart back, on_capped() is called; it is called
+    again only after a later restart has been allowed. now() is injectable for tests."""
+
+    def __init__(
+        self,
+        on_capped,
+        now=time.monotonic,
+        cooldown=SLOW_COOLDOWN,
+        limit=SLOW_RESTART_LIMIT,
+        period=SLOW_RESTART_PERIOD,
+    ):
+        self.on_capped, self.now = on_capped, now
+        self.cooldown, self.limit, self.period = cooldown, limit, period
+        self.last = now()
+        self.allowed = collections.deque()  # times of the slow-cycle restarts allowed
+        self.capped = False
+
+    def restarted(self):
+        self.last = self.now()
+
+    def allow(self):
+        """True when a slow-cycle restart may happen now; it then counts towards the limit."""
+        t = self.now()
+        if t - self.last < self.cooldown:
+            return False
+        while self.allowed and t - self.allowed[0] >= self.period:
+            self.allowed.popleft()
+        if len(self.allowed) >= self.limit:
+            if not self.capped:
+                self.capped = True
+                self.on_capped()
+            return False
+        self.allowed.append(t)
+        self.capped = False
+        return True
+
+
 # ---------------------------------------------------------------- processes
 
 _print_lock = threading.Lock()
@@ -1123,6 +1257,13 @@ class Session:
             self.spare = self.start_encoder()
         say(f"streaming to the panel at {self.a.bitrate:g} Mb/s; stop with Ctrl-C")
 
+        self.slow_restarts = SlowRestarts(
+            lambda: say(
+                f"warning: the capture is still in KWin's slow cycle after {SLOW_RESTART_LIMIT} restarts within "
+                f"{SLOW_RESTART_PERIOD} s; further restarts for it are held to {SLOW_RESTART_LIMIT} per "
+                f"{SLOW_RESTART_PERIOD} s"
+            )
+        )
         self.restarts = RestartTimer()
         try:
             watch = WindowWatch(output_name(self.a.name), self.restarts.event)
@@ -1231,16 +1372,19 @@ class Session:
                 if gst.read_fd is not None:
                     os.close(gst.read_fd)
 
-    def restart_capture(self):
+    def restart_capture(self, reason):
+        """Give KWin's stream to the spare encoder, which restarts the capture, and print reason
+        with the time the restart took."""
         started = time.monotonic()
         spare, self.spare = self.spare, None
         self.switch_to(spare)
+        self.slow_restarts.restarted()
         linked = time.monotonic()
         first = (time.monotonic() - linked) * 1000 if self.relay.first_frame.wait(2) else None
         if self.spare is None:
             self.spare = self.start_encoder()
         say(
-            f"a window came onto {output_name(self.a.name)}: restarted the capture, "
+            f"{reason}: restarted the capture, "
             + (
                 f"relinked after {(linked - started) * 1000:.0f} ms, first new frame sent {first:.0f} ms later"
                 if first is not None
@@ -1256,7 +1400,10 @@ class Session:
                 if not c.alive():
                     raise DisplayError(c.exited())
             if self.restarts.due():
-                self.restart_capture()
+                self.restart_capture(f"a window came onto {output_name(self.a.name)}")
+            cycle = self.relay.slow_cycle
+            if cycle is not None and self.slow_restarts.allow():
+                self.restart_capture(f"the capture fell into KWin's slow cycle ({SLOW_FRAMES} frames every {cycle:.0f} ms)")
             if time.monotonic() >= next_stats:
                 next_stats += STATS_EVERY
                 fps, mbps = rate.sample()

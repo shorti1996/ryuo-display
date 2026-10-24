@@ -5,11 +5,13 @@ generated into tmp_path and are skipped when the binaries are missing.
 """
 import json
 import shutil
+import struct
 import subprocess
 import sys
 import threading
 import time
 import types
+import zlib
 
 import pytest
 
@@ -218,6 +220,27 @@ def test_device_name():
     long = M.device_name("a" * 100 + ".mp4", now)
     assert long == "2026-10-23_18-07-49-639_" + "a" * M.STEM_MAX + ".mp4"
     assert not M.device_name("RYUO_IV_HW_Info_01.mp4", now).startswith("RYUO")
+
+
+# ---------------------------------------------------------------- black image for the second display
+
+def test_black_png_is_a_valid_2240x1080_black_image():
+    data = M.black_png()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    chunks, pos = [], 8
+    while pos < len(data):
+        (length,) = struct.unpack(">I", data[pos : pos + 4])
+        kind, body = data[pos + 4 : pos + 8], data[pos + 8 : pos + 8 + length]
+        (crc,) = struct.unpack(">I", data[pos + 8 + length : pos + 12 + length])
+        assert crc == zlib.crc32(kind + body), kind
+        chunks.append((kind, body))
+        pos += 12 + length
+    assert [k for k, _ in chunks] == [b"IHDR", b"IDAT", b"IEND"]
+    # width, height, bit depth 8, colour type 2 (RGB), compression, filter, interlace
+    assert struct.unpack(">IIBBBBB", chunks[0][1]) == (2240, 1080, 8, 2, 0, 0, 0)
+    # Each row: filter byte 0, then 2240 pixels of 3 zero bytes.
+    assert zlib.decompress(chunks[1][1]) == bytes((1 + 2240 * 3) * 1080)
+    assert len(data) < 10_000
 
 
 # ---------------------------------------------------------------- running tools

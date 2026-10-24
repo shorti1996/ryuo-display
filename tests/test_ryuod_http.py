@@ -438,6 +438,7 @@ def test_media_select(api):
     status, _, body = api.post("/api/media/select", {"media": ["RYUO_IV_HW_Info_02.mp4", CUSTOM[0]], "playMode": "Cycle"})
     assert status == 200
     assert body["restartsVideo"] is True
+    assert body["heldByDisplay"] is False
     assert body["sent"] == ["POST waterBlockScreenId"]
     assert body["config"]["media"] == ["RYUO_IV_HW_Info_02.mp4", CUSTOM[0]]
     ((method, cmd, cfg),) = api.sent
@@ -448,6 +449,17 @@ def test_media_select(api):
     assert api.d.device.submitted[0][3] == 1.0
     assert api.disk_state()["media"] == ["RYUO_IV_HW_Info_02.mp4", CUSTOM[0]]
     assert api.disk_state()["playMode"] == "Cycle"
+
+
+def test_media_select_while_the_second_display_streams_saves_without_sending(api):
+    api.d.backdrop.on = True
+    status, _, body = api.post("/api/media/select", {"media": [CUSTOM[0]], "playMode": "Single"})
+    assert status == 200
+    assert body["heldByDisplay"] is True
+    assert (body["applied"], body["sent"], body["restartsVideo"]) == (False, [], False)
+    assert body["config"]["media"] == [CUSTOM[0]]
+    assert api.sent == []
+    assert api.disk_state()["media"] == [CUSTOM[0]]
 
 
 def test_media_select_keeps_play_mode_and_hidden_stats(api):

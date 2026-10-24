@@ -407,6 +407,199 @@ def test_no_restart_for_a_window_that_left_again():
     assert timer.due()  # the menu stayed
 
 
+# ---------------------------------------------------------------- KWin's slow capture cycle
+
+# Gaps in ms between frames as the relay sent them, rounded, from two recordings on Plasma 6.7.5
+# (2026-10-24). Each constant is the frames of one encoder; the relay resets the detector between them.
+RUN1_SLOW = (  # 500 ms cycle from the start, static windows on the output
+    "356 1 60 350 83 1 101 403 1 27 350 117 17 84 399 17 84 400 16 84 399 1 100 399 17 84 399 17 84 400 16 85 398 17 16"
+)
+RUN1_AFTER = (  # the first second after the restart that ended it
+    "17 1 36 2 18 9 40 9 20 18 13 16 16 17 16 19 15 16 18 17 16 17 16 16 18 15 17 15 17 17 17 17 17 17 17 "
+    "17 17 17 17 17 17 17 18 16 17 17 17 17 17 17 17 17 17 17 17 17 17 18 16 17"
+)
+RUN2_SLOW = (  # 500 ms cycle from the start, mpv playing a 30 frames/s video on the output
+    "0 43 402 1 32 60 407 16 76 407 1 92 407 1 92 407 1 92 407 1 92 407 1 92 408 1 92 407 1 33 59 408 1 55 394"
+)
+RUN2_PARTIAL = (  # 100 ms cycle after one restart, with 4 s of the video's uniform 33 ms in between
+    "32 24 43 70 11 51 66 15 16 67 16 17 67 16 16 67 16 17 84 16 17 67 16 17 67 17 17 67 17 17 67 16 24 "
+    "66 15 63 34 32 33 33 33 33 33 33 34 50 33 33 33 33 33 34 33 33 33 33 33 33 33 33 33 34 33 33 33 33 "
+    "33 33 33 33 33 33 33 34 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 50 34 33 33 33 33 33 33 33 "
+    "34 33 33 33 34 50 33 33 33 33 33 33 33 33 34 33 33 33 33 33 33 33 33 33 33 33 33 33 33 34 33 33 33 "
+    "33 33 33 33 33 33 33 33 33 34 33 35 32 33 33 33 33 50 17 33 67 16 17 67 16 17 67 16 17 66 16 17 100 "
+    "16 17 67 16 17 67 16 17 67 16 17 67 16 17 68 16 17 67 16 17 67 16 17 67 16 17 67 16 17 67 16 17 67 "
+    "16 17 67 16 17 67 16 17 67 16 17 67 16 17 67 16 17 67 17 16 67 17 17"
+)
+RUN2_AFTER = (  # the first second after the second restart, at 60 frames/s
+    "13 19 24 17 5 18 19 16 23 12 19 12 16 18 16 17 16 18 16 17 16 17 15 17 17 17 17 14 17 17 17 17 17 17 "
+    "17 17 17 17 17 17 17 17 17 16 17 17 17 17 17 17 17 17 17 17 17 17 17 17 17 17"
+)
+# The two windows of the 60 frames/s phases that come closest: the pointer moving gives a 50 ms cycle
+# of 3 frames, and a dropped frame gives a long, uneven 17, 17, 50 ms cycle that does not repeat.
+NEAR_POINTER = "1 33 16 1 33 1 32 1 33 16 1 32 17 1 33 17 33 17 17 17 17 17"
+NEAR_DROP = "17 17 17 17 17 16 18 32 17 17 50 17 17 17 17 17 17 17 17 17"
+
+
+def feed(detector, gaps, start=1000.0):
+    """detector.frame() for a first frame at start and one more after each gap (ms, a list or a
+    space-separated string); the result for each frame, in order."""
+    if isinstance(gaps, str):
+        gaps = [float(g) for g in gaps.split()]
+    t, out = start, [detector.frame(start)]
+    for g in gaps:
+        t += g / 1000
+        out.append(detector.frame(t))
+    return out
+
+
+@pytest.mark.parametrize(
+    "gaps, cycle",
+    [
+        ([407, 1, 92] * 4, 500),  # the 500 ms cycle
+        ([399, 17, 84] * 4, 500),
+        ([16, 17, 67] * 4, 100),  # the 100 ms cycle after one restart
+        ([16, 17, 84, 16, 17, 67, 16, 17, 67, 17, 17, 67, 17, 17, 67], 101),
+    ],
+)
+def test_slow_cycle_is_recognised(gaps, cycle):
+    got = feed(D.SlowCycle(), gaps)
+    assert got[-1] == pytest.approx(cycle, abs=1)
+    assert got[: 3 * D.SLOW_FRAMES] == [None] * (3 * D.SLOW_FRAMES)  # 3 whole cycles of gaps first
+
+
+@pytest.mark.parametrize(
+    "gaps",
+    [
+        "17 17 17 17 16 17 17 17 24 11 17 19 18 15 14 15 33 21 13 16",  # 60 frames/s
+        "33 33 34 50 33 33 33 33 34 33 33 33 33 50 33 33",  # a 30 frames/s app
+        [500] * 12,  # a cursor blinking
+        [17, 17, 33] * 5,  # 45 frames/s: a 67 ms cycle
+        [17, 33, 33] * 5,  # 36 frames/s: gaps one refresh interval apart
+        [33, 33, 50] * 5,  # 25.7 frames/s
+        "8 41 17 120 33 260 17 17 90 400 33 17 1200 50 17 17 33 640 17",  # the pointer moved now and then
+        [30_000, 4_000, 95_000, 600, 30_000, 4_000, 95_000, 600, 30_000, 4_000],  # an idle desktop
+        NEAR_POINTER,
+        NEAR_DROP,
+        RUN1_AFTER,
+        RUN2_AFTER,
+    ],
+)
+def test_other_cadences_are_not_the_slow_cycle(gaps):
+    assert set(feed(D.SlowCycle(), gaps)) == {None}
+
+
+def test_one_odd_gap_holds_the_slow_cycle_back_for_three_cycles():
+    det = D.SlowCycle()
+    got = feed(det, [407, 1, 92] * 3 + [407, 1, 92 + D.SLOW_TOLERANCE + 1] + [407, 1, 92] * 3)
+    assert got[9:12] == pytest.approx([500] * 3)
+    assert got[12:21] == [None] * 9  # every 9-gap window that holds the odd gap
+    assert got[21] == pytest.approx(500)
+
+
+def test_reset_forgets_the_frames_so_far():
+    det = D.SlowCycle()
+    assert feed(det, [407, 1, 92] * 3)[-1] == pytest.approx(500)
+    det.reset()
+    assert set(feed(det, [407, 1, 92] * 2, start=2000.0)) == {None}
+
+
+@pytest.mark.parametrize(
+    "segments",
+    [
+        [(RUN1_SLOW, 500), (RUN1_AFTER, None)],
+        [(RUN2_SLOW, 500), (RUN2_PARTIAL, 100), (RUN2_AFTER, None)],
+    ],
+)
+def test_recorded_runs_are_slow_only_until_the_restarts(segments):
+    det = D.SlowCycle()
+    for gaps, cycle in segments:
+        det.reset()
+        got = [c for c in feed(det, gaps) if c is not None]
+        if cycle is None:
+            assert got == []
+        else:
+            assert got and all(abs(c - cycle) <= 10 for c in got)  # ms; 67, 16, 24 makes 107
+
+
+def test_slow_restarts_wait_for_the_cooldown_and_stop_at_the_limit():
+    clock, capped = [0.0], []
+    limit = D.SlowRestarts(lambda: capped.append(clock[0]), now=lambda: clock[0])
+    clock[0] = D.SLOW_COOLDOWN - 0.1
+    assert not limit.allow()  # the stream's start counts as a restart
+    clock[0] = 3.0
+    assert limit.allow()
+    clock[0] = 4.0
+    limit.restarted()  # a window arrived
+    clock[0] = 6.9
+    assert not limit.allow()
+    clock[0] = 7.0
+    assert limit.allow()
+    clock[0] = 10.0
+    assert limit.allow()  # the third within 60 s
+    clock[0] = 13.0
+    assert not limit.allow()
+    clock[0] = 40.0
+    assert not limit.allow()
+    assert capped == [13.0]  # said once
+    clock[0] = 63.0  # the restart at 3.0 is 60 s old
+    assert limit.allow()
+    clock[0] = 66.0
+    assert not limit.allow()  # 7.0, 10.0 and 63.0 are within 60 s
+    assert capped == [13.0, 66.0]
+
+
+def test_relay_reports_the_slow_cycle_until_the_next_encoder():
+    class Detector:
+        resets = 0
+
+        def reset(self):
+            self.resets += 1
+
+        def frame(self, t):
+            return 500.0
+
+    first_r, first_w = os.pipe()
+    second_r, second_w = os.pipe()
+    a, b = socket.socketpair()
+    relay = D.Relay(a, D.Stats(), [].append)
+    relay.slow = detector = Detector()
+    relay.start()
+    relay.use(first_r)
+    os.write(first_w, gdp(D.GDP_BUFFER, AU1))
+    assert relay.first_frame.wait(5)
+    assert relay.slow_cycle == 500.0
+    relay.use(second_r)
+    assert relay.slow_cycle is None
+    os.write(second_w, gdp(D.GDP_BUFFER, AU2))
+    assert relay.first_frame.wait(5)
+    assert (relay.slow_cycle, detector.resets) == (500.0, 2)
+    os.close(first_w)
+    os.close(second_w)
+    relay.close()
+    a.close()
+    b.close()
+
+
+def test_watch_restarts_the_capture_for_the_slow_cycle():
+    s = D.Session(D.parse_args([]), contextlib.ExitStack())
+    s.receiver = s.krfb = s.gst = s.spare = types.SimpleNamespace(alive=lambda: True)
+    s.relay = types.SimpleNamespace(slow_cycle=500.4)
+    s.restarts = D.RestartTimer()
+    clock = [0.0]
+    s.slow_restarts = D.SlowRestarts(lambda: None, now=lambda: clock[0])
+    clock[0] = D.SLOW_COOLDOWN
+    reasons = []
+
+    def restart_capture(reason):
+        reasons.append(reason)
+        s.fail("stop the watch")
+
+    s.restart_capture = restart_capture
+    with pytest.raises(D.DisplayError, match="stop the watch"):
+        s.watch()
+    assert reasons == ["the capture fell into KWin's slow cycle (3 frames every 500 ms)"]
+
+
 # ---------------------------------------------------------------- pointer: desktop portal capture
 
 
