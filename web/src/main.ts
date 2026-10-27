@@ -5,22 +5,24 @@ import { createActions } from "./actions.ts";
 import { createPoll, Store } from "./state.ts";
 import { RyuoApp } from "./ui/ryuo-app.ts";
 import { RyuoAppTab } from "./ui/ryuo-app-tab.ts";
+import { RyuoBackgroundTab } from "./ui/ryuo-background-tab.ts";
+import { RyuoHero } from "./ui/ryuo-hero.ts";
 import { RyuoMirrorTab } from "./ui/ryuo-mirror-tab.ts";
-import { RyuoMirrorView } from "./ui/ryuo-mirror-view.ts";
 import { RyuoOverlayTab } from "./ui/ryuo-overlay-tab.ts";
 import { RyuoSlotPicker } from "./ui/ryuo-slot-picker.ts";
-import { RyuoStatsPreview } from "./ui/ryuo-stats-preview.ts";
+import { RyuoUploadZone } from "./ui/ryuo-upload-zone.ts";
 
 // Defined once per document. The tests start the page again in the same document after
 // vi.resetModules(); the first start's classes stay, and the new store reaches them through `app`.
 for (const [name, element] of [
   ["ryuo-app", RyuoApp],
   ["ryuo-app-tab", RyuoAppTab],
+  ["ryuo-background-tab", RyuoBackgroundTab],
+  ["ryuo-hero", RyuoHero],
   ["ryuo-mirror-tab", RyuoMirrorTab],
-  ["ryuo-mirror-view", RyuoMirrorView],
   ["ryuo-overlay-tab", RyuoOverlayTab],
   ["ryuo-slot-picker", RyuoSlotPicker],
-  ["ryuo-stats-preview", RyuoStatsPreview],
+  ["ryuo-upload-zone", RyuoUploadZone],
 ] as const) {
   if (!customElements.get(name)) customElements.define(name, element);
 }

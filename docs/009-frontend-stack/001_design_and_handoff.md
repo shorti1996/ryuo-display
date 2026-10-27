@@ -193,10 +193,6 @@ changed it, and those changes must be ported into the new page.
 ## Open questions
 
 - None at design time. Anything found during the port goes here with the step it belongs to.
-- Step 1: `prefs.test.js` and `sync.test.js` stay on the old harness. Every case in them also
-  reads slots, the preview, colours, brightness or the playlist, which steps 2 and 4 port.
-  `features.test.js` mixes the tray and desktop cases with panel, standby and preset cases, so
-  it moves with step 4. Its tray cases pass against the new page when run on the new harness.
 - Step 1: the Units card (°C/°F, memory MHz) sits in the Overlay tab, not the App tab. It stays
   there, as static markup, so the page looks the same; `actions.sendPrefs` is ready and the
   Overlay tab renders the card in step 2.
@@ -226,34 +222,35 @@ changed it, and those changes must be ported into the new page.
   arrives, and a slot change made after it sends it back unchanged. No test tells the two apart.
 - Step 2: brightness holds `brightness` and `brightnessPercent` together, during the drag, the
   150 ms debounce and the POST: the slider shows the percent and a reply carries both.
-- Step 2: `errors.test.js` and `sync.test.js` stay on the old harness. Blocking cases: errors
-  "treats a 200 with ok:false as an error" (Restart video), "shows a failed GET /api/state in the
-  header and clears it on the next good poll" (the hero's standby view), "loads the media list
-  once the daemon answers" (media tiles); sync "reaches the playlist, play mode, live chip and
-  badges on the next poll" and "a playlist tick waiting in its debounce wins over a poll". Their
-  other cases, and the features cases that read only the header, strip and toast, are copied
-  unchanged into `overlay-tab.test.js`, as step 1 did; the copies go when the source file moves.
-- Step 2: the preview's six slots and filter layer are a `<ryuo-stats-preview>` inside the hero,
-  which is still static markup; the shell hands it `app`. Step 4's `ryuo-hero` renders
-  `statsPreview()` itself and the element goes. The slot under the pointer is `hotSlot` in
-  `AppState`, since the picker sets it and the preview draws it.
-- Step 2: the panel is merged like a settings section (key `panel.on`), so the switch keeps the
-  click while its POST runs and is disabled meanwhile. The hero's Turn on button, also bound to
-  `sendPanel`, is wired with the hero in step 4.
+- Step 2: the slot under the pointer is `hotSlot` in `AppState`, since the slot picker sets it
+  and the hero's stats preview draws it.
+- Step 2: the panel is merged like a settings section (key `panel.on`), so the header switch and
+  the hero's Turn on button keep the click while its POST runs and are disabled meanwhile.
 - Step 3: `displayWant` is store state. A click sets it and holds `display.on` while the POST
   runs; every poll copies `display.on` into it unless held, with no `seen` comparison, as the old
   page reconciled it on every poll. The POST reply updates the status line but not the switch:
   the old page's `renderDisplay(j.display)` ran while `displaySending` was still true. The
   strip's segments and overlay box, the header's panel switch and the hero read it.
-- Step 3: the hero's mirror view is `<ryuo-mirror-view>` inside the static hero, as the stats
-  preview is. It decides the hero's view without the preview: ryuod down, then standby, then the
-  mirror. Step 4's `ryuo-hero` must put the preview between "down" and "standby" (the old
-  `renderHero` order) and set `hero.dataset.view`, which nothing sets now.
 - Step 3: before the first poll the mirror controls stay enabled and the status line reads "…",
   as the old page's markup did until `renderDisplay` first ran; "Not available" shows only once
   a poll has answered without `display`.
-- Step 3: `errors.test.js` and `sync.test.js` stay on the old harness, blocked by the same five
-  cases as in step 2. `features.test.js` "sends the panel to standby: the hero goes black with
-  Turn on, and the mirror is locked out" checks the mirror lockout but also the hero's standby
-  view, so it is not copied; the other mirror cases (panel switch locked during the mirror, the
-  screen-share choice, Open Display Configuration) are copied into `mirror-tab.test.js`.
+- Step 4: every `tests/*.test.js` now loads the Lit page through `harness-lit.js`, and the copies
+  steps 1 to 3 made in `app-tab`, `overlay-tab` and `mirror-tab.test.js` are gone. `harness.js`
+  keeps the fake ryuod, the helpers and the `Option` polyfill, re-exported by `harness-lit.js`;
+  its page loading is deleted. Its `legacy` option is now used by no test; step 5 can drop it
+  with the rename or merge of the two files.
+- Step 4: the hero's view is `media.ts` `heroView`, in the old `renderHero` order: ryuod down, a
+  preview, standby, the mirror, live. `<ryuo-hero>` is the hero box itself (`#hero`, with
+  `role="region"` in place of the old `<section>`) and sets `data-view`. Its `<video>` and `<img>`
+  are driven by hand in `updated()`, not by template bindings, so the source changes only when the
+  file does; a binding would restart the video on every poll.
+- Step 4: the playlist draft is `ticked` in `AppState`; the play mode edits `config.playMode`
+  directly, as an overlay edit does. A focused play mode select holds only `playMode`, where the
+  old page held the whole media group, so another client's playlist change now resets the ticks
+  while the select has focus (the step 2 rule above). No test tells the two apart.
+- Step 4: Restart video, Apply and the debounce take only `media` and `playMode` from the POST
+  reply. The old page replaced its whole config with the reply's, which could put back a slot or
+  colour still waiting in the overlay debounce.
+- Step 4: a thumbnail that failed to load is asked for again only when a new media list arrives
+  (Refresh, a delete, a finished upload, ryuod coming back). The old page also retried on every
+  `renderMedia`, which ran after each config apply and Apply as well.

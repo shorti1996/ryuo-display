@@ -7,21 +7,31 @@
 import {
   postBrightness,
   postDisplay,
+  postMediaDelete,
+  postMediaSelect,
   postOpenSettings,
   postOverlay,
   postPanel,
   postPrefs,
   postResetChoice,
   postTray,
+  postUploadCancel,
+  sendUpload,
 } from "./api.ts";
-import type { Config, PrefsBody, TrayBody, TrayClick } from "./api-types.ts";
+import type { Config, PlayMode, PrefsBody, TrayBody, TrayClick } from "./api-types.ts";
 import { brightnessValue } from "./brightness.ts";
+import { liveName } from "./media.ts";
 import { OVERLAY_KEYS, overlayBody, rgbHex } from "./overlay.ts";
+import { deleteText, playlistOrder, playlistText, tickFile } from "./playlist.ts";
 import { report } from "./report.ts";
 import { fail, type Poll, type Store } from "./state.ts";
+import { sendEnded, sending, uploadActive } from "./upload.ts";
 
 export const OVERLAY_DEBOUNCE_MS = 300; // overlay edits within this window go out as one POST
 export const BRIGHTNESS_DEBOUNCE_MS = 150; // the slider sends once it has rested this long
+export const PLAY_DEBOUNCE_MS = 400; // playlist ticks and play mode changes within this window go out as one selection
+// Both playlist fields: POST /api/media/select carries the files and the play mode together.
+const PLAYLIST_KEYS = ["media", "playMode"] as const;
 // Both brightness fields: the slider shows the percent, and a reply carries both.
 const BRIGHTNESS_KEYS = ["brightness", "brightnessPercent"] as const;
 // What a drag holds: a range under the pointer may rest between input events, and the poll
@@ -104,6 +114,13 @@ export function createActions(store: Store, poll: Poll) {
           for (const key of keys) store.edit(key, false);
         }, ms);
       },
+      /** Drop the waiting send and its hold: a send that goes out at once replaces it. */
+      cancel(): void {
+        if (timer === undefined) return;
+        clearTimeout(timer);
+        timer = undefined;
+        for (const key of keys) store.edit(key, false);
+      },
       pending: () => timer !== undefined,
     };
   }
@@ -115,6 +132,7 @@ export function createActions(store: Store, poll: Poll) {
   // the debounce would otherwise copy another client's colour into the POST (sync.test.js).
   const overlaySend = debounced(OVERLAY_KEYS, OVERLAY_DEBOUNCE_MS, sendOverlay);
   const brightnessSend = debounced(BRIGHTNESS_KEYS, BRIGHTNESS_DEBOUNCE_MS, sendBrightness);
+  const playSend = debounced(PLAYLIST_KEYS, PLAY_DEBOUNCE_MS, play);
   let dragged: readonly string[] = [];
 
   /** POST the whole overlay as the controls hold it; the message names what changed. */
@@ -357,6 +375,157 @@ export function createActions(store: Store, poll: Poll) {
     }
   }
 
+  /** Tick or untick `name` "In playlist". The playlist goes out 400 ms after the last change. */
+  function tickMedia(name: string, on: boolean): void {
+    store.patch({ ticked: tickFile(store.state.ticked, name, on) });
+    playSend.schedule();
+  }
+
+  /** The play mode select changed; it goes out with the ticked files, as one selection. */
+  function setPlayMode(mode: PlayMode): void {
+    const config = store.state.config;
+    if (!config) return;
+    store.patch({ config: { ...config, playMode: mode } });
+    playSend.schedule();
+  }
+
+  /**
+   * POST `media` with the play mode as the select shows it. Returns the playlist ryuod took, or
+   * null when it refused; a refusal leaves the config as it was.
+   */
+  async function selectMedia(media: string[], playMode: PlayMode, notDone: string): Promise<string[] | null> {
+    let taken: string[] | null = null;
+    await holding(PLAYLIST_KEYS, async () => {
+      try {
+        const reply = await postMediaSelect({ media, playMode });
+        const saved = { media: reply.config.media, playMode: reply.config.playMode };
+        store.saw("config", saved);
+        // A newer tick waiting in the debounce keeps the draft; it goes out with its own POST.
+        const now = store.state.config;
+        if (now && !playSend.pending()) store.patch({ config: { ...now, ...saved } });
+        const [text, detail] = report(reply, playlistText(media, playMode));
+        store.say(text, false, detail);
+        taken = saved.media;
+      } catch (error) {
+        fail(store, error, notDone);
+      }
+    });
+    return taken;
+  }
+
+  /**
+   * Send the ticked files in list order with the play mode: Restart video, and the debounce's
+   * send. A pending debounce is dropped, since this sends what it would have.
+   */
+  async function play(): Promise<void> {
+    playSend.cancel();
+    const config = store.state.config;
+    if (!config) return;
+    const media = playlistOrder(store.state.media, store.state.ticked);
+    if (!media.length) {
+      // The panel keeps playing the old playlist, so the boxes go back to it.
+      store.patch({ ticked: [...config.media] });
+      store.say("Keep at least one file in the playlist", true);
+      return;
+    }
+    await selectMedia(media, config.playMode, "Playlist not changed");
+  }
+
+  /** Preview `name` in the hero; a click on the file the hero already plays live goes back to live. */
+  function showPreview(name: string): void {
+    const { config, displayWant } = store.state;
+    store.patch({ applyAsking: false, preview: name === liveName(config) && !displayWant ? null : name });
+  }
+
+  function closePreview(): void {
+    store.patch({ applyAsking: false, preview: null });
+  }
+
+  /**
+   * Apply: play the previewed file alone, at once, unless the playlist has other files it would
+   * drop; then the preview bar asks first. Returns true when it asks.
+   */
+  function askApply(): boolean {
+    if ((store.state.config?.media.length ?? 0) > 1) {
+      store.patch({ applyAsking: true });
+      return true;
+    }
+    void showOnPanel();
+    return false;
+  }
+
+  function cancelApply(): void {
+    store.patch({ applyAsking: false });
+  }
+
+  /** Play the previewed file alone, with the play mode; the hero goes live on it. */
+  async function showOnPanel(): Promise<void> {
+    const name = store.state.preview;
+    const config = store.state.config;
+    store.patch({ applyAsking: false });
+    if (!name || !config) return;
+    playSend.cancel();
+    const taken = await selectMedia([name], config.playMode, `${name} not applied`);
+    if (!taken) return;
+    store.patch({ ticked: [...taken] });
+    if (store.state.preview === name) closePreview();
+  }
+
+  /** Delete `name` from the cooler; the tiles and the playlist follow ryuod's reply. */
+  async function deleteMedia(name: string): Promise<void> {
+    try {
+      const reply = await postMediaDelete([name]);
+      // Only the playlist: the rest of reply.config may predate an overlay edit still in its debounce.
+      const media = reply.config.media;
+      store.saw("config", { media });
+      const config = store.state.config;
+      store.patch({ media: reply.media, ...(config ? { config: { ...config, media }, ticked: [...media] } : {}) });
+      const preview = store.state.preview;
+      if (preview !== null && reply.deleted.includes(preview)) closePreview();
+      const { text, bad, detail } = deleteText(reply);
+      store.say(text, bad, detail);
+    } catch (error) {
+      fail(store, error, `${name} not deleted`);
+    }
+  }
+
+  // The upload's POST while it sends the file, and whether Cancel ended it, for its last status.
+  let uploadRequest: { abort(): void } | null = null;
+  let uploadCancelled = false;
+
+  /**
+   * Upload `file`, converted to the panel's shape with `fit` (crop or pad). Refused while another
+   * upload runs, from this page or another: ryuod converts one at a time.
+   */
+  function upload(file: File | undefined, fit: string): void {
+    if (!file) return;
+    const progress = store.state.upload;
+    if (progress.sending || uploadActive(progress.shown)) {
+      store.say("Wait for the current upload to finish first", true);
+      return;
+    }
+    uploadCancelled = false;
+    store.patch({ upload: sending(progress, file.name, 0) });
+    uploadRequest = sendUpload(file, fit, {
+      progress: (fraction) => store.patch({ upload: sending(store.state.upload, file.name, fraction) }),
+      end: (status, reply) => {
+        uploadRequest = null;
+        store.patch({ upload: sendEnded(store.state.upload, status, reply, uploadCancelled) });
+      },
+    });
+  }
+
+  /** Cancel the upload: ryuod stops its job, and the POST stops if it is still sending. */
+  async function cancelUpload(): Promise<void> {
+    uploadCancelled = true;
+    try {
+      await postUploadCancel();
+    } catch {
+      // the upload had already finished
+    }
+    uploadRequest?.abort();
+  }
+
   async function openDisplaySettings(): Promise<void> {
     try {
       const reply = await postOpenSettings();
@@ -384,6 +553,18 @@ export function createActions(store: Store, poll: Poll) {
     sendPrefs,
     resetChoice,
     openDisplaySettings,
+    tickMedia,
+    setPlayMode,
+    play,
+    refreshMedia: () => poll.loadMedia(true),
+    showPreview,
+    closePreview,
+    askApply,
+    cancelApply,
+    showOnPanel,
+    deleteMedia,
+    upload,
+    cancelUpload,
     dismissToast: () => store.dismiss(),
   };
 }

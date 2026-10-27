@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, CUSTOM, makeDaemon, openPage, preview, tick } from "./harness.js";
+import { $, CUSTOM, makeDaemon, openPage, preview, tick } from "./harness-lit.js";
 
 const TABS = ["overlay", "background", "mirror", "app"];
 const selectedTab = () => TABS.filter((t) => $("tab-" + t).getAttribute("aria-selected") === "true");
@@ -59,16 +59,6 @@ describe("hero", () => {
     expect($("heroVideo").getAttribute("src")).toBe("/api/media/preview?name=RYUO_IV_HW_Info_04.mp4");
     expect($("heroHint").textContent).toBe("");
     expect($("liveText").textContent).toBe("Live · RYUO_IV_HW_Info_04.mp4");
-  });
-
-  it("shows a preset that plays live as a hint, from an older ryuod without preset previews", async () => {
-    await openPage(makeDaemon({ legacy: true }));
-    expect($("hero").dataset.view).toBe("live");
-    expect($("liveChip").hidden).toBe(false);
-    expect($("liveDot").className).toBe("dot ok");
-    expect($("liveText").textContent).toBe("Live · RYUO_IV_HW_Info_04.mp4");
-    expect($("heroHint").textContent).toBe("RYUO_IV_HW_Info_04.mp4 · built-in preset, no browser preview");
-    expect($("heroVideo").hasAttribute("src")).toBe(false);
   });
 
   it("plays a Custom file that plays live behind the overlay", async () => {

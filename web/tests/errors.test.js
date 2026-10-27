@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, CUSTOM, PRESET, choose, makeDaemon, openPage, option, setInput, slot, tick } from "./harness.js";
+import { $, CUSTOM, PRESET, choose, makeDaemon, openPage, option, setInput, slot, tick } from "./harness-lit.js";
 
 describe("API errors", () => {
   it("shows a 400 from POST /api/overlay and recovers on the next edit", async () => {

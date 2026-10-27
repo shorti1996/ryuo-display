@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, makeDaemon, openPage, option, slot, slotSelects, tick } from "./harness.js";
+import { $, makeDaemon, openPage, option, slot, slotSelects, tick } from "./harness-lit.js";
 
 describe("initial load", () => {
   it("asks for catalog, state, media and stats, in that order", async () => {

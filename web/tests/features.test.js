@@ -1,11 +1,11 @@
 /**
  * Features of a ryuod with the panel switch: POST /api/panel and the standby it holds commands
  * in, the tray settings (POST /api/tray), the screen-share reset and Display Configuration
- * buttons, and preset previews. A ryuod without them (legacy) gets none of these controls.
+ * buttons, and preset previews.
  */
 import { describe, expect, it } from "vitest";
 
-import { $, CUSTOM, PRESET, choose, makeDaemon, openPage, setInput, tick } from "./harness.js";
+import { $, CUSTOM, PRESET, choose, makeDaemon, openPage, setInput, tick } from "./harness-lit.js";
 
 const checkedAttr = (id) => $(id).getAttribute("aria-checked");
 const MIRROR_IN_STANDBY = "the panel is in standby; turn it on before the second display";
@@ -84,13 +84,6 @@ describe("panel switch", () => {
     await tick(1000);
     expect($("standbyView").hidden).toBe(false);
     expect($("panelOffView").hidden).toBe(true);
-  });
-
-  it("is hidden for an older ryuod, which has no panel switch", async () => {
-    await openPage(makeDaemon({ legacy: true }));
-    expect($("panelSwitch").hidden).toBe(true);
-    expect($("panelOffView").hidden).toBe(true);
-    expect($("modeMirror").disabled).toBe(false);
   });
 });
 
@@ -237,11 +230,6 @@ describe("tray settings", () => {
     expect($("trayClick").value).toBe("stats");
     expect(chips()).toEqual(["30 %", "60 %"]);
   });
-
-  it("is hidden for an older ryuod", async () => {
-    await openPage(makeDaemon({ legacy: true }));
-    expect($("trayCard").hidden).toBe(true);
-  });
 });
 
 describe("screen-share choice", () => {
@@ -267,12 +255,6 @@ describe("screen-share choice", () => {
     await openPage(makeDaemon({ display: { on: true, state: "starting" } }));
     expect($("askAgain").disabled).toBe(true);
     expect($("askAgain").title).toBe("the second display is starting; try again once it is on or off");
-  });
-
-  it("is hidden for an older ryuod", async () => {
-    await openPage(makeDaemon({ legacy: true }));
-    expect($("askAgain").hidden).toBe(true);
-    expect($("choiceText").hidden).toBe(true);
   });
 });
 
@@ -303,11 +285,6 @@ describe("Open Display Configuration", () => {
     expect($("displaySettingsRow").hidden).toBe(true);
     expect($("mirrorSettings").hidden).toBe(true);
   });
-
-  it("is hidden for an older ryuod", async () => {
-    await openPage(makeDaemon({ legacy: true }));
-    expect($("displaySettingsRow").hidden).toBe(true);
-  });
 });
 
 describe("preset previews", () => {
@@ -322,16 +299,6 @@ describe("preset previews", () => {
     expect(d.posts("/api/media/select")).toEqual([{ media: [PRESET[0]], playMode: "Single" }]);
     expect($("liveText").textContent).toBe(`Live · ${PRESET[0]}`);
     expect(box(PRESET[0]).checked).toBe(true);
-  });
-
-  it("drop to the old placeholders when ryuod is replaced by an older one", async () => {
-    const d = await openPage();
-    expect(tile(PRESET[0]).querySelector("button.thumb")).not.toBeNull();
-    d.legacy = true;
-    await tick(1000);
-    expect(tile(PRESET[0]).querySelector("button")).toBeNull();
-    expect($("panelSwitch").hidden).toBe(true);
-    expect($("trayCard").hidden).toBe(true);
   });
 });
 

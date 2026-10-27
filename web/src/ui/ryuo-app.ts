@@ -12,15 +12,7 @@ const TAB_LABELS: Record<Tab, string> = {
   mirror: "Desktop mirror",
   app: "App",
 };
-// The old page's markup in index.html, not yet ported to an element, by the selector that finds it.
-const STATIC_PARTS = {
-  hero: ":scope > #hero",
-  background: ":scope > #tp-background",
-} as const;
-// The hero is still static markup; these elements inside it need the store.
-const HERO_ELEMENTS = "ryuo-stats-preview, ryuo-mirror-view";
 const SUN = html`<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#A6A9B0" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
-type StaticPart = keyof typeof STATIC_PARTS;
 const KEY_MOVES: Record<string, (index: number) => number> = {
   ArrowRight: (index) => index + 1,
   ArrowLeft: (index) => index - 1,
@@ -29,14 +21,13 @@ const KEY_MOVES: Record<string, (index: number) => number> = {
 };
 
 /**
- * The shell: header with the connection pill and the panel switch, the strip under the hero
- * ("Panel shows" segments, overlay box, brightness, sample time), the tabs, the Overlay,
- * Desktop mirror and App tabs, and the toast.
+ * The shell: header with the connection pill and the panel switch, the hero, the strip under it
+ * ("Panel shows" segments, overlay box, brightness, sample time), the tabs and their panels, and
+ * the toast.
  */
 export class RyuoApp extends RyuoElement {
   static override properties: PropertyDeclarations = { tab: { state: true } };
   declare tab: Tab;
-  #parts: Partial<Record<StaticPart, Element>> = {};
   #focusTab = false;
   // A drag ends wherever the pointer is released, often off the slider.
   #endDrag = () => this.app?.actions.endDrag();
@@ -58,21 +49,6 @@ export class RyuoApp extends RyuoElement {
     super.disconnectedCallback();
   }
 
-  protected override willUpdate(changed: PropertyValues<this>): void {
-    super.willUpdate(changed);
-    // The static parts are taken out before the first render and put back by the template, in
-    // the old page's order: Lit renders after an element's existing children, and these sit
-    // between parts the template draws (the hero before the tab list, the panels after it).
-    // Taken here rather than on connect: an element already defined when its markup is parsed
-    // (each test after the first) is connected before its children are.
-    if (this.hasUpdated) return;
-    for (const [name, selector] of Object.entries(STATIC_PARTS) as [StaticPart, string][]) {
-      const part = this.querySelector(selector);
-      if (part) this.#parts[name] = part;
-    }
-    this.replaceChildren();
-  }
-
   /** Show tab `id`, and give it focus when the user moved there from the keyboard or the pill. */
   select(id: Tab, focus = false): void {
     this.tab = id;
@@ -90,11 +66,6 @@ export class RyuoApp extends RyuoElement {
 
   protected override updated(changed: PropertyValues<this>): void {
     super.updated(changed);
-    for (const element of this.#parts.hero?.querySelectorAll<RyuoElement>(HERO_ELEMENTS) ?? []) {
-      if (element.app !== this.app) element.app = this.app;
-    }
-    const background = this.#parts.background as HTMLElement | undefined;
-    if (background) background.hidden = this.tab !== "background";
     if (this.#focusTab) {
       this.#focusTab = false;
       this.querySelector<HTMLElement>(`#tab-${this.tab}`)?.focus();
@@ -193,13 +164,14 @@ export class RyuoApp extends RyuoElement {
   }
 
   protected override render() {
-    const parts = this.#parts;
     return html`${this.#header()}
       <main>
-        ${parts.hero} ${this.#strip()} ${this.#tabs()}
+        <ryuo-hero class="hero" id="hero" role="region" aria-label="Panel preview" .app=${this.app}></ryuo-hero>
+        ${this.#strip()} ${this.#tabs()}
         <ryuo-overlay-tab role="tabpanel" id="tp-overlay" aria-labelledby="tab-overlay" class="cols" ?hidden=${this.tab !== "overlay"}
           .app=${this.app}></ryuo-overlay-tab>
-        ${parts.background}
+        <ryuo-background-tab role="tabpanel" id="tp-background" aria-labelledby="tab-background" class="stack" style="gap: 20px"
+          ?hidden=${this.tab !== "background"} .app=${this.app}></ryuo-background-tab>
         <ryuo-mirror-tab role="tabpanel" id="tp-mirror" aria-labelledby="tab-mirror" class="cols" ?hidden=${this.tab !== "mirror"}
           .app=${this.app}></ryuo-mirror-tab>
         <ryuo-app-tab role="tabpanel" id="tp-app" aria-labelledby="tab-app" class="cols" ?hidden=${this.tab !== "app"}

@@ -13,8 +13,8 @@ import type {
   MediaLists,
   StatsReply,
   TrayStatus,
-  UploadStatus,
 } from "./api-types.ts";
+import { fromPoll, NO_UPLOAD, type UploadProgress } from "./upload.ts";
 
 /** The result toast. Hiding it keeps the text, as the old page did. */
 export interface Toast {
@@ -42,10 +42,20 @@ export interface AppState {
    * A poll copies display.on into it except while that key is held.
    */
   displayWant: boolean;
-  upload: UploadStatus | null;
+  /** The upload as the drop zone and its status line show it (upload.ts). */
+  upload: UploadProgress;
   stats: StatsReply | null;
   catalog: CatalogItem[];
   media: MediaLists;
+  /**
+   * The files ticked "In playlist": the playlist draft, sent 400 ms after the last tick. A poll
+   * that brings a new config.media from ryuod sets it to that playlist.
+   */
+  ticked: string[];
+  /** The file previewed in the hero, or null for the hero's live view. */
+  preview: string | null;
+  /** The preview bar asks before Apply replaces a playlist of several files. */
+  applyAsking: boolean;
   toast: Toast;
   /**
    * The slot (0-5) whose row is under the pointer or has focus, or null. The slot picker sets it
@@ -72,10 +82,13 @@ function initialState(): AppState {
     panel: null,
     display: null,
     displayWant: false,
-    upload: null,
+    upload: NO_UPLOAD,
     stats: null,
     catalog: [],
     media: { source: null, fetchedAt: null, preset: [], custom: [] },
+    ticked: [],
+    preview: null,
+    applyAsking: false,
     toast: { text: "", bad: false, detail: "", shown: false },
     hotSlot: null,
     editing: new Set(),
@@ -252,8 +265,12 @@ export function createPoll(store: Store) {
     // leaves it as it was.
     const display = reply.display;
     const want = display && !store.state.editing.has("display.on") ? { displayWant: display.on } : {};
-    store.patch({ device: reply.device, display, upload: reply.upload, ...want });
+    const { progress, finished } = fromPoll(store.state.upload, reply.upload);
+    store.patch({ device: reply.device, display, upload: progress, ...want });
     const changed = store.merge("config", reply.config);
+    // A playlist from ryuod (the first poll, or another client's change) replaces the draft.
+    const config = store.state.config;
+    if (config && changed.includes("media")) store.patch({ ticked: [...config.media] });
     store.merge("tray", reply.tray);
     store.merge("desktop", reply.desktop);
     // Merged like the settings, so the switch keeps the user's click while its POST runs.
@@ -261,6 +278,17 @@ export function createPoll(store: Store) {
     // A unit change from another client: the catalog's units follow tempUnit. The first poll
     // needs no refetch; the startup sequence fetched the catalog just before it.
     if (!first && changed.some((key) => UNIT_KEYS.includes(key))) void refreshCatalog();
+    if (finished) void uploadFinished(finished);
+  }
+
+  /**
+   * A watched upload is done: ryuod has added the file to its cached list and plays it alone, on
+   * a loop. The list is fetched without asking the cooler again.
+   */
+  async function uploadFinished(name: string): Promise<void> {
+    await loadMedia(false);
+    const config = store.state.config;
+    if (config) store.patch({ config: { ...config, media: [name], playMode: "Single" }, ticked: [name] });
   }
 
   async function pollStats(): Promise<void> {

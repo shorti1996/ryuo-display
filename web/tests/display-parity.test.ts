@@ -267,7 +267,7 @@ describe("the hero's mirror view, as the old renderHero drew it", () => {
           for (const want of [false, true]) {
             const $ = oldPage.render(status, panelOn, want);
             const input = `${JSON.stringify(status?.state ?? null)} panel=${panelOn} want=${want}`;
-            // ui/ryuo-mirror-view.ts: standby outranks the mirror; ryuod answers in this matrix.
+            // media.ts heroView: standby outranks the mirror; ryuod answers and nothing is previewed here.
             record(`mirrorView ${input}`, $("mirrorView").hidden, !(panelOn !== false && heroMirror(want, status)));
             record(`chip ${input}`, $("mirrorChip").textContent, mirrorChipText(status));
             record(`caption ${input}`, $("mirrorHint").hidden, !mirrorHintShown(status));

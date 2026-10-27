@@ -1,79 +1,14 @@
 /**
- * The Desktop mirror tab and the controls bound to the second-display switch on the Lit page
- * (tests/harness-lit.js). The first three describe blocks are cases copied unchanged from
- * features.test.js, which stays on the old harness until the Background tab and the hero are
- * ported; the copies go when it moves. The last block covers what step 3 changed: the header's
- * panel switch and the strip's overlay box follow the mirror switch's click, not ryuod's
- * display.on.
+ * The Desktop mirror tab and the controls bound to the second-display switch on the Lit page:
+ * what step 3 changed (the header's panel switch and the strip's overlay box follow the mirror
+ * switch's click, not ryuod's display.on), and the refusal paths no old test checks. The old
+ * tests of the tab (display and features.test.js) run against this page as they are.
  */
 import { describe, expect, it } from "vitest";
 
 import { $, makeDaemon, openPage, tick } from "./harness-lit.js";
 
 const STANDBY_IN_MIRROR = "the panel shows the second display; turn that off before standby";
-
-describe("panel switch", () => {
-  it("is disabled while the panel shows the second display, with ryuod's reason", async () => {
-    await openPage(makeDaemon({ display: { on: true, state: "on", fps: 60, mbps: 9 } }));
-    expect($("panelSwitch").disabled).toBe(true);
-    expect($("panelSwitch").title).toBe(STANDBY_IN_MIRROR);
-  });
-});
-
-describe("screen-share choice", () => {
-  it("Ask again deletes the saved choice", async () => {
-    const d = await openPage();
-    expect($("askAgain").hidden).toBe(false);
-    expect($("askAgain").disabled).toBe(false);
-    expect($("choiceText").textContent).toBe("A screen-share choice is saved, so starts skip the question. Ask again deletes it.");
-    $("askAgain").click();
-    await tick(0);
-    expect(d.posts("/api/display/reset-choice")).toEqual([{}]);
-    expect($("result").textContent).toBe("Screen-share choice deleted; the next start of the second display asks again");
-    expect($("askAgain").disabled).toBe(true);
-    expect($("choiceText").textContent).toBe("No screen-share choice is saved; the next start asks which screen to share.");
-  });
-
-  it("is disabled with nothing saved", async () => {
-    await openPage(makeDaemon({ desktop: { portalTokenSaved: false } }));
-    expect($("askAgain").disabled).toBe(true);
-  });
-
-  it("is disabled while the second display starts, with ryuod's reason", async () => {
-    await openPage(makeDaemon({ display: { on: true, state: "starting" } }));
-    expect($("askAgain").disabled).toBe(true);
-    expect($("askAgain").title).toBe("the second display is starting; try again once it is on or off");
-  });
-});
-
-describe("Open Display Configuration", () => {
-  it("opens from the Desktop mirror tab and from the hero caption", async () => {
-    const d = await openPage(makeDaemon({ display: { on: true, state: "on", fps: 60, mbps: 9 } }));
-    expect($("displaySettingsRow").hidden).toBe(false);
-    expect($("mirrorSettings").hidden).toBe(false);
-    expect($("mirrorSettings").getAttribute("aria-label")).toBe("Open Display Configuration");
-    $("displaySettingsOpen").click();
-    await tick(0);
-    $("mirrorSettings").click();
-    await tick(0);
-    expect(d.posts("/api/display/open-settings")).toEqual([{}, {}]);
-    expect($("result").textContent).toBe("Display Configuration opened; Virtual-RYUO is in the monitor list");
-  });
-
-  it("shows ryuod's reason when it cannot", async () => {
-    const d = await openPage();
-    d.replyOnce("POST /api/display/open-settings", { status: 503, body: { ok: false, error: "no Wayland session yet" } });
-    $("displaySettingsOpen").click();
-    await tick(0);
-    expect($("result").textContent).toBe("Display Configuration not opened: no Wayland session yet");
-  });
-
-  it("is hidden when neither kcmshell6 nor systemsettings is installed", async () => {
-    await openPage(makeDaemon({ desktop: { displaySettings: null } }));
-    expect($("displaySettingsRow").hidden).toBe(true);
-    expect($("mirrorSettings").hidden).toBe(true);
-  });
-});
 
 /**
  * Hold every POST /api/display until the returned `answer()` is called, so a test can look at

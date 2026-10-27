@@ -1,16 +1,7 @@
-// Loads web/index.html into the happy-dom document and runs its inline <script> against a
-// fake ryuod. The fake follows ryuod.py's Handler (do_GET, do_POST, post_*): same routes,
-// same validation messages for the cases the tests use, same response shapes.
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+// A fake ryuod and the helpers the tests drive the page with; harness-lit.js loads the page.
+// The fake follows ryuod.py's Handler (do_GET, do_POST, post_*): same routes, same validation
+// messages for the cases the tests use, same response shapes.
 import { vi } from "vitest";
-
-// A path, not new URL(): happy-dom replaces the global URL, and readFileSync wants Node's.
-const HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.html"), "utf8");
-const SCRIPT = HTML.match(/<script>([\s\S]*?)<\/script>/)[1];
-const HEAD = HTML.match(/<head>([\s\S]*?)<\/head>/)[1];
-const BODY = HTML.match(/<body>([\s\S]*?)<\/body>/)[1].replace(/<script>[\s\S]*?<\/script>/, "");
 
 // Captured before any test fakes the timers: one real macrotask drains every pending
 // microtask, which is how long a chain of awaited fake fetches takes to finish.
@@ -20,7 +11,8 @@ export const settle = async () => {
   await new Promise((r) => realSetImmediate(r));
 };
 
-// happy-dom 20 has no `Option` constructor; the page uses `new Option(text, value)`.
+// happy-dom 20 has no `Option` constructor. The old page built its slot lists with
+// `new Option(text, value)`; the Lit page does not, but the polyfill stays for code that does.
 if (typeof globalThis.Option !== "function") {
   globalThis.Option = function Option(text = "", value) {
     const o = document.createElement("option");
@@ -399,21 +391,6 @@ function respond({ status, body, text }) {
 
 // 2026-10-22 was a Thursday.
 export const NOW = new Date(2026, 9, 22, 14, 5, 9);
-
-/**
- * Fresh document from index.html, fake timers at NOW, fetch served by `daemon`, then the
- * page script, then wait for the startup sequence (catalog, state, media, stats).
- */
-export async function openPage(daemon = makeDaemon()) {
-  vi.useFakeTimers({ now: NOW, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
-  globalThis.fetch = window.fetch = daemon.fetch;
-  document.head.innerHTML = HEAD;
-  document.body.innerHTML = BODY;
-  globalThis.__closePage = () => { daemon.closed = true; };
-  new Function(SCRIPT)();
-  await settle();
-  return daemon;
-}
 
 /** Advance the fake clock by `ms`, running timers and the fetches they start. */
 export async function tick(ms) {

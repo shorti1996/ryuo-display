@@ -6,7 +6,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { $, CUSTOM, PRESET, choose, makeDaemon, openPage, tick } from "./harness.js";
+import { $, CUSTOM, PRESET, choose, makeDaemon, openPage, tick } from "./harness-lit.js";
 
 const tiles = () => [...document.querySelectorAll(".tile")];
 const tile = (name) => tiles().find((t) => t.dataset.name === name);
@@ -189,15 +189,6 @@ describe("Custom tiles", () => {
       expect(tile(name).querySelector("button.del")).toBeNull();
     }
     expect(document.querySelectorAll(".tile button.del")).toHaveLength(CUSTOM.length);
-  });
-
-  it("are placeholders for presets on an older ryuod, which serves no preset thumbnails", async () => {
-    await openPage(makeDaemon({ legacy: true }));
-    for (const name of PRESET) {
-      expect(tile(name).querySelector("button")).toBeNull();
-      expect(tile(name).querySelector("img")).toBeNull();
-    }
-    expect($("presetSub").textContent).toBe("/sdcard/pcMediaPreset, no browser preview");
   });
 
   it("leave the size empty when the daemon has none", async () => {
