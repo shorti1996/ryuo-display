@@ -43,7 +43,20 @@ import ryuo_media as M  # noqa: E402
 import ryuo_proto as P  # noqa: E402
 
 DEFAULT_PORT = 8746
-INDEX = os.path.join(HERE, "web", "index.html")
+# The control page as Vite builds it (web/src/ into web/dist/). The build is committed, so a
+# checkout serves the page without node.
+DIST = os.path.join(HERE, "web", "dist")
+# Content-Type by extension for the files in DIST; anything else goes out as plain bytes.
+STATIC_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".woff2": "font/woff2",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".json": "application/json",
+    ".map": "application/json",
+}
 MAX_BODY = 16 * 1024
 MAX_UPLOAD = 4 * 2**30      # bytes, for POST /api/media/upload
 UPLOAD_CHUNK = 2**20
@@ -1967,19 +1980,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self.host_ok():
             return
         path, _, query = self.path.partition("?")
-        if path in ("/", "/index.html"):
-            try:
-                with open(INDEX, "rb") as f:
-                    data = f.read()
-            except OSError:
-                return self.error(404, "web/index.html missing")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(data)
-            return
+        if not path.startswith("/api/"):
+            return self.get_static(path)
         route = {"/api/state": self.get_state, "/api/stats": self.get_stats,
                  "/api/catalog": self.get_catalog, "/api/media": self.get_media,
                  "/api/media/thumb": self.get_thumb, "/api/media/preview": self.get_preview}.get(path)
@@ -2027,6 +2029,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.error(400, str(e))
 
     # -- GET
+
+    def get_static(self, path):
+        """A file of the built control page in DIST; / is its index.html. Only a regular file
+        inside DIST is served, after resolving symlinks and `..`, so a crafted path cannot reach
+        the rest of the checkout, and a directory gets no listing."""
+        name = urllib.parse.unquote(path)
+        if name == "/":
+            name = "/index.html"
+        root = os.path.realpath(DIST)
+        # realpath refuses a NUL byte with ValueError; no file name has one.
+        full = None if "\0" in name else os.path.realpath(os.path.join(root, name.lstrip("/")))
+        if full is None or not full.startswith(root + os.sep) or not os.path.isfile(full):
+            missing = "web/dist/index.html missing; run make build-frontend" if name == "/index.html" else "not found"
+            return self.error(404, missing)
+        try:
+            with open(full, "rb") as f:
+                data = f.read()
+        except OSError:
+            return self.error(404, "not found")
+        ctype = STATIC_TYPES.get(os.path.splitext(full)[1].lower(), "application/octet-stream")
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        # A rebuilt page reaches the browser on the next load; the files carry no content hash.
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
 
     def get_state(self, _q):
         st = self.d.state.get()

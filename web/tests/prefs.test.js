@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, choose, makeDaemon, openPage, option, preview, setInput, slot, tick } from "./harness-lit.js";
+import { $, choose, makeDaemon, openPage, option, preview, setInput, slot, tick } from "./harness.js";
 
 const unitRadio = (v) => document.querySelector(`input[name=unit][value=${v}]`);
 

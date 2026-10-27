@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, choose, makeDaemon, openPage, option, preview, slot, slotSelects, tick } from "./harness-lit.js";
+import { $, choose, makeDaemon, openPage, option, preview, slot, slotSelects, tick } from "./harness.js";
 
 describe("changing a slot", () => {
   it("sends one POST /api/overlay 300 ms after the last change, with the full overlay", async () => {

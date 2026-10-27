@@ -1,11 +1,12 @@
 // @vitest-environment node
 /**
- * display.ts against the old page's second-display code (web/index.html at eab6057): displayText,
- * renderDisplaySwitch, renderDisplay, renderPanelSwitch and renderHero, run over every display
- * status ryuod can report, with the panel on, in standby or unknown, and the switch either way.
+ * display.ts against the old page's second-display code (web/index.html at eab6057, kept in
+ * fixtures/old-page.js): displayText, renderDisplaySwitch, renderDisplay, renderPanelSwitch and
+ * renderHero, run over every display status ryuod can report, with the panel on, in standby or
+ * unknown, and the switch either way.
  * The old functions write the DOM through $(); here $() hands out plain records, and the test
  * reads what they were given. display-status.test.ts writes the expected sentences out; this file
- * only checks that the two pages agree, so the switch commit deletes it with web/index.html.
+ * only checks that the two pages agree.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -29,12 +30,12 @@ import {
   standbyBlocked,
 } from "../src/display.ts";
 
-const OLD_PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.html"), "utf8");
+const OLD_PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "old-page.js"), "utf8");
 
 /** The old page's top-level function `name`, as source. */
 function oldFunction(name: string): string {
   const source = OLD_PAGE.match(new RegExp(`\\nfunction ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`))?.[0];
-  if (!source) throw new Error(`web/index.html has no function ${name}`);
+  if (!source) throw new Error(`fixtures/old-page.js has no function ${name}`);
   return source;
 }
 const OLD_CONSTANTS =

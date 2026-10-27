@@ -1,8 +1,8 @@
 // @vitest-environment node
 /**
  * Upload progress (upload.ts): the status line against the old page's renderUpload()
- * (web/index.html, line 1209 at eab6057) over every state, and how the POST's events and the
- * state polls move the progress.
+ * (web/index.html, line 1209 at eab6057, kept in fixtures/old-page.js) over every state, and how
+ * the POST's events and the state polls move the progress.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,7 +21,7 @@ import {
   uploadText,
 } from "../src/upload.ts";
 
-const OLD_PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.html"), "utf8");
+const OLD_PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "old-page.js"), "utf8");
 const OLD_SOURCE =
   OLD_PAGE.match(/\nconst UP_ACTIVE = [\s\S]*?\nfunction renderUpload\(u\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
 

@@ -1,6 +1,7 @@
 # Control page rewrite: Lit + TypeScript + Vite
 
-Status: designed, nothing implemented. 2026-10-27, from a design interview in a Claude Code
+Status: implemented on branch frontend-lit, 2026-10-27; pending: port of the burn-in-protection
+branch's page changes, then merge. Designed the same day in a design interview in a Claude Code
 session. Work happens in the `frontend-lit` branch, worktree
 `/home/shared/repos/rog-ryuo-lcd-frontend-lit`, while `burn-in-protection` continues in the main
 checkout.
@@ -234,11 +235,6 @@ changed it, and those changes must be ported into the new page.
 - Step 3: before the first poll the mirror controls stay enabled and the status line reads "…",
   as the old page's markup did until `renderDisplay` first ran; "Not available" shows only once
   a poll has answered without `display`.
-- Step 4: every `tests/*.test.js` now loads the Lit page through `harness-lit.js`, and the copies
-  steps 1 to 3 made in `app-tab`, `overlay-tab` and `mirror-tab.test.js` are gone. `harness.js`
-  keeps the fake ryuod, the helpers and the `Option` polyfill, re-exported by `harness-lit.js`;
-  its page loading is deleted. Its `legacy` option is now used by no test; step 5 can drop it
-  with the rename or merge of the two files.
 - Step 4: the hero's view is `media.ts` `heroView`, in the old `renderHero` order: ryuod down, a
   preview, standby, the mirror, live. `<ryuo-hero>` is the hero box itself (`#hero`, with
   `role="region"` in place of the old `<section>`) and sets `data-view`. Its `<video>` and `<img>`
@@ -249,8 +245,27 @@ changed it, and those changes must be ported into the new page.
   old page held the whole media group, so another client's playlist change now resets the ticks
   while the select has focus (the step 2 rule above). No test tells the two apart.
 - Step 4: Restart video, Apply and the debounce take only `media` and `playMode` from the POST
-  reply. The old page replaced its whole config with the reply's, which could put back a slot or
-  colour still waiting in the overlay debounce.
+  reply, where the old page replaced its whole config with the reply's. The Lit page's overlay
+  controls render from the config, so the whole reply would show its older slot or colour over an
+  edit still in the 300 ms overlay debounce. The old page's overlay controls never read the
+  config, so neither page loses that edit (`background-tab.test.js`, "a playlist POST's reply").
 - Step 4: a thumbnail that failed to load is asked for again only when a new media list arrives
   (Refresh, a delete, a finished upload, ryuod coming back). The old page also retried on every
   `renderMedia`, which ran after each config apply and Apply as well.
+- Step 5: five test files ran the old page's own functions, not three: `upload.test.ts`
+  (`renderUpload`) and `media-view.test.ts` (`fmtSize`) as well as `report.test.ts`,
+  `display-parity.test.ts` and `background-tab.test.js`. All five now read
+  `web/tests/fixtures/old-page.js`, the twelve pieces they use copied verbatim from `web/index.html`
+  at 048e543, with the same patterns as before; every comparison still runs.
+- Step 5: an armed Delete ("Really delete?") is dropped when Apply or Replace plays a file, as the
+  old page's tile rebuild did. The trigger is `AppState.applied`, a count `showOnPanel` raises
+  after ryuod takes the file; the Background tab disarms when it changes. A failed Apply keeps the
+  armed button, as the old page's did.
+- Step 5: `tests/harness.js` stays out of Biome's scope, as it was. `harness-lit.js` was in it;
+  `harness.js` with its `openPage` merged in would need Biome's reformatting of the whole fake
+  ryuod, which no step asked for.
+- Step 5: `make lint` stops at `uv run ruff format --check .`, which already fails on `main`:
+  ruff 0.17.2 would reformat 14 Python files, `ryuod.py` among them. The `npm run lint` step added
+  after it passes when run alone. New Python code in this step is formatted as ruff wants.
+- Step 5: `make test-frontend` also fails when the build adds a file git does not track yet (a new
+  font, say): `git diff` alone does not see untracked files.

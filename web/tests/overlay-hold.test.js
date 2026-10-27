@@ -1,11 +1,11 @@
 /**
- * Step 2 review cases on the Lit page (tests/harness-lit.js): what a poll may and may not change
+ * Step 2 review cases on the Lit page: what a poll may and may not change
  * while an overlay edit waits in its debounce or a colour input has focus, a colour saved as
  * #AARRGGBB, and the header's panel switch around a poll with no `panel` and a POST that fails.
  */
 import { describe, expect, it } from "vitest";
 
-import { $, choose, makeDaemon, openPage, option, preview, slot, tick } from "./harness-lit.js";
+import { $, choose, makeDaemon, openPage, option, preview, slot, tick } from "./harness.js";
 
 const checkedAttr = (id) => $(id).getAttribute("aria-checked");
 

@@ -467,7 +467,7 @@ export function createActions(store: Store, poll: Poll) {
     playSend.cancel();
     const taken = await selectMedia([name], config.playMode, `${name} not applied`);
     if (!taken) return;
-    store.patch({ ticked: [...taken] });
+    store.patch({ ticked: [...taken], applied: store.state.applied + 1 });
     if (store.state.preview === name) closePreview();
   }
 

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, choose, makeDaemon, openPage, preview, setInput, slot, tick } from "./harness-lit.js";
+import { $, choose, makeDaemon, openPage, preview, setInput, slot, tick } from "./harness.js";
 
 describe("preview slots", () => {
   it("draws each chosen item with its panel title, value and unit", async () => {

@@ -56,6 +56,11 @@ export interface AppState {
   preview: string | null;
   /** The preview bar asks before Apply replaces a playlist of several files. */
   applyAsking: boolean;
+  /**
+   * How many times Apply or Replace has played a file. The Background tab drops a Delete waiting
+   * for its second click when this changes, as the old page did by rebuilding its tiles then.
+   */
+  applied: number;
   toast: Toast;
   /**
    * The slot (0-5) whose row is under the pointer or has focus, or null. The slot picker sets it
@@ -89,6 +94,7 @@ function initialState(): AppState {
     ticked: [],
     preview: null,
     applyAsking: false,
+    applied: 0,
     toast: { text: "", bad: false, detail: "", shown: false },
     hotSlot: null,
     editing: new Set(),

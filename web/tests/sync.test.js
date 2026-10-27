@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, CUSTOM, choose, openPage, preview, setInput, slot, tick } from "./harness-lit.js";
+import { $, CUSTOM, choose, openPage, preview, setInput, slot, tick } from "./harness.js";
 
 const box = (name) => [...document.querySelectorAll(".tile input[type=checkbox]")].find((b) => b.value === name);
 const badge = (name) => {

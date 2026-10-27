@@ -1,8 +1,8 @@
 // @vitest-environment node
 /**
  * The Background media's pure parts (media.ts): file sizes against the old page's fmtSize()
- * (web/index.html, line 922 at eab6057), the tiles' badges, and the hero's view, file and hint
- * in the old renderHero's order.
+ * (web/index.html, line 922 at eab6057, kept in fixtures/old-page.js), the tiles' badges, and the
+ * hero's view, file and hint in the old renderHero's order.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,7 +24,7 @@ import {
   tileMark,
 } from "../src/media.ts";
 
-const OLD_PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.html"), "utf8");
+const OLD_PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "old-page.js"), "utf8");
 const OLD_SIZE = OLD_PAGE.match(/\nfunction fmtSize\(n\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
 const oldSize = new Function(`${OLD_SIZE}\nreturn fmtSize;`)() as (bytes: number | null | undefined) => string;
 

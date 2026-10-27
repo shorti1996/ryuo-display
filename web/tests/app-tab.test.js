@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, choose, makeDaemon, openPage, tick } from "./harness-lit.js";
+import { $, choose, makeDaemon, openPage, tick } from "./harness.js";
 
 const checkedAttr = (id) => $(id).getAttribute("aria-checked");
 const chips = () => [...$("traySteps").querySelectorAll(".step")].map((c) => c.textContent);

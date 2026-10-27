@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, makeDaemon, openPage, tick } from "./harness-lit.js";
+import { $, makeDaemon, openPage, tick } from "./harness.js";
 
 const STANDBY_IN_MIRROR = "the panel shows the second display; turn that off before standby";
 

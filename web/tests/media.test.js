@@ -6,7 +6,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { $, CUSTOM, PRESET, choose, makeDaemon, openPage, tick } from "./harness-lit.js";
+import { $, CUSTOM, PRESET, choose, makeDaemon, openPage, tick } from "./harness.js";
 
 const tiles = () => [...document.querySelectorAll(".tile")];
 const tile = (name) => tiles().find((t) => t.dataset.name === name);

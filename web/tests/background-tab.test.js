@@ -5,8 +5,7 @@
  * written down here.
  *
  * "the hero, as the old renderHero drew it" runs the old page's renderHero, showDown and
- * renderPanel out of web/index.html, as display-parity.test.ts does, so the switch commit deletes
- * that describe block with web/index.html.
+ * renderPanel, kept in fixtures/old-page.js, as display-parity.test.ts does.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,7 +23,7 @@ import {
   PRESET,
   slot,
   tick,
-} from "./harness-lit.js";
+} from "./harness.js";
 
 const tiles = () => [...document.querySelectorAll(".tile")];
 const tile = (name) => tiles().find((found) => found.dataset.name === name);
@@ -38,7 +37,7 @@ const store = () => document.querySelector("ryuo-app").app.store;
 const LIVE = "RYUO_IV_HW_Info_04.mp4"; // harness.js defaultConfig().media[0]
 
 /** The old page's top-level code, for the parity block at the end. */
-const OLD_PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.html"), "utf8");
+const OLD_PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "old-page.js"), "utf8");
 
 describe("the play mode select", () => {
   // The old page held the whole media group while the select had focus, so another client's
@@ -500,18 +499,38 @@ describe("Delete", () => {
     expect(daemon.posts("/api/media/delete")).toEqual([{ names: [CUSTOM[0]] }]);
     expect(tile(CUSTOM[0])).toBeUndefined();
   });
+
+  // The old page rebuilt every tile when Apply or Replace played a file, which dropped a pending
+  // second click; a click meant for the old tiles must not delete from the new ones.
+  it.each([
+    ["Apply", [LIVE], ["pvApply"]],
+    ["Replace", [LIVE, CUSTOM[1]], ["pvApply", "pvReplace"]],
+  ])("drops a pending second click when %s plays a file", async (_name, media, clicks) => {
+    const daemon = await openPage(makeDaemon({ config: { media } }));
+    delButton(CUSTOM[0]).click();
+    expect(state(CUSTOM[0])[0]).toBe("Really delete?");
+    thumb(PRESET[0]).click();
+    for (const id of clicks) $(id).click();
+    await tick(0);
+    expect(daemon.posts("/api/media/select")).toEqual([{ media: [PRESET[0]], playMode: "Single" }]);
+    expect(state(CUSTOM[0])).toEqual(["", "del", `Delete ${CUSTOM[0]}`]);
+    delButton(CUSTOM[0]).click();
+    await tick(0);
+    expect(daemon.posts("/api/media/delete")).toEqual([]);
+    expect(state(CUSTOM[0])[0]).toBe("Really delete?");
+  });
 });
 
 describe("the hero, as the old renderHero drew it", () => {
   /** The old page's top-level function `name`, as source. */
   function oldFunction(name) {
     const source = OLD_PAGE.match(new RegExp(`\\nfunction ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`))?.[0];
-    if (!source) throw new Error(`web/index.html has no function ${name}`);
+    if (!source) throw new Error(`fixtures/old-page.js has no function ${name}`);
     return source;
   }
   function oldLine(start) {
     const source = OLD_PAGE.match(new RegExp(`\\n${start}[^\\n]*\\n`))?.[0];
-    if (!source) throw new Error(`web/index.html has no line starting ${start}`);
+    if (!source) throw new Error(`fixtures/old-page.js has no line starting ${start}`);
     return source;
   }
 

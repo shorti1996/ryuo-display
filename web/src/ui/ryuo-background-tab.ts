@@ -37,6 +37,7 @@ export class RyuoBackgroundTab extends RyuoElement {
   /** Thumbnails ryuod could not make (no adb, or ffmpeg could not read the file), until the next media list. */
   #noThumb = new Set<string>();
   #lists: MediaLists | undefined;
+  #applied = 0;
 
   constructor() {
     super();
@@ -49,11 +50,20 @@ export class RyuoBackgroundTab extends RyuoElement {
     // A new media list redraws the tiles, as the old page's renderMedia did: it drops a pending
     // second click, since the file it named may be gone, and asks again for the thumbnails that
     // failed, since adb may be back.
-    const lists = this.app?.store.state.media;
+    const state = this.app?.store.state;
+    const lists = state?.media;
     if (lists !== this.#lists) {
       this.#lists = lists;
       this.#disarm();
       this.#noThumb.clear();
+    }
+    // Apply and Replace rebuilt the old page's tiles too, dropping a pending second click, so a
+    // click meant before the playlist changed cannot delete after it. Failed thumbnails stay
+    // failed: playing a file does not bring adb back.
+    const applied = state?.applied ?? 0;
+    if (applied !== this.#applied) {
+      this.#applied = applied;
+      this.#disarm();
     }
   }
 

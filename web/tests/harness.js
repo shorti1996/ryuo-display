@@ -1,6 +1,10 @@
-// A fake ryuod and the helpers the tests drive the page with; harness-lit.js loads the page.
-// The fake follows ryuod.py's Handler (do_GET, do_POST, post_*): same routes, same validation
-// messages for the cases the tests use, same response shapes.
+// Loads the control page (src/index.html and src/main.ts) into the happy-dom document against a
+// fake ryuod, and the helpers the tests drive the page with. The fake follows ryuod.py's Handler
+// (do_GET, do_POST, post_*): same routes, same validation messages for the cases the tests use,
+// same response shapes.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { vi } from "vitest";
 
 // Captured before any test fakes the timers: one real macrotask drains every pending
@@ -115,12 +119,9 @@ class Refused extends Error { constructor(status, msg) { super(msg); this.status
  * replies with `replyOnce`, and read what the page sent from `calls`.
  */
 export function makeDaemon({
-  config = {}, device = {}, stats = {}, media, display = {}, upload = null, legacy = false, panel = {}, tray = {}, desktop = {},
+  config = {}, device = {}, stats = {}, media, display = {}, upload = null, panel = {}, tray = {}, desktop = {},
 } = {}) {
   const d = {
-    // A ryuod from before the panel switch: no panel, tray or desktop in GET /api/state, no
-    // config.brightnessPercent, no {percent} brightness, and none of the routes added with them.
-    legacy,
     panel: { on: true, ...clone(panel) },
     tray: { ...defaultTray(), ...clone(tray) },
     desktop: { ...defaultDesktop(), ...clone(desktop) },
@@ -165,12 +166,12 @@ export function makeDaemon({
 
   const reply = (status, body) => ({ status, body });
   // public_config(): what every reply that carries the config sends.
-  const pub = () => (d.legacy ? clone(d.config) : { ...clone(d.config), brightnessPercent: brightnessPercent(d.config.brightness) });
+  const pub = () => ({ ...clone(d.config), brightnessPercent: brightnessPercent(d.config.brightness) });
   const trayStatus = () => ({
     ...clone(d.tray), brightnessStepValues: d.tray.brightnessSteps.map(brightnessValue), leftClickOptions: [...TRAY_CLICKS],
   });
   // Device.held(): while the panel is in standby, brightness, preset and config are saved, not sent.
-  const standby = () => !d.legacy && !d.panel.on;
+  const standby = () => !d.panel.on;
   const heldReply = { applied: false, acked: false, heldByStandby: true };
   const err = (status, msg) => reply(status, { ok: false, error: msg });
   const applied = () => ({ applied: d.device.connected, acked: d.device.connected });
@@ -181,7 +182,7 @@ export function makeDaemon({
       limits: { slots: 6, brightnessMax: 102, frameMax: 1024, lastHeartbeatBytes: 548 },
       media: { preset: [...d.mediaLists.preset], custom: [...d.mediaLists.custom] },
       display: clone(d.display), upload: clone(d.upload),
-      ...(d.legacy ? {} : { panel: clone(d.panel), tray: trayStatus(), desktop: clone(d.desktop) }),
+      panel: clone(d.panel), tray: trayStatus(), desktop: clone(d.desktop),
     }),
     "GET /api/stats": () => {
       const values = {};
@@ -222,14 +223,13 @@ export function makeDaemon({
     },
     "POST /api/brightness": (body) => {
       let v = body.value;
-      if ("percent" in body && !d.legacy) {
+      if ("percent" in body) {
         const p = body.percent;
         if (!Number.isInteger(p) || p < 0 || p > 100) throw new Invalid("percent must be an integer 0-100");
         v = brightnessValue(p);
       } else if (!Number.isInteger(v) || v < 0 || v > 102) throw new Invalid("value must be an integer 0-102");
       d.config.brightness = v;
       const level = Math.min(255, Math.floor(v * 2.5));
-      if (d.legacy) return reply(200, { ok: true, ...applied(), sent: ["POST brightness"], restartsVideo: false, deviceLevel: level });
       const res = standby() ? { ...heldReply, sent: [] } : { ...applied(), sent: ["POST brightness"] };
       return reply(200, { ok: true, ...res, restartsVideo: false, deviceLevel: level, value: v, percent: brightnessPercent(v) });
     },
@@ -353,8 +353,7 @@ export function makeDaemon({
     const method = opt.method || "GET";
     const [path, query = ""] = String(url).split("?");
     const route = `${method} ${path}`;
-    const added = ["POST /api/panel", "POST /api/tray", "POST /api/display/reset-choice", "POST /api/display/open-settings"];
-    if (!String(url).startsWith("/api/") || !(route in routes) || (d.legacy && added.includes(route))) {
+    if (!String(url).startsWith("/api/") || !(route in routes)) {
       globalThis.__strayRequests.push(`fetch ${method} ${url}`);
       throw new Error(`fake daemon has no route for ${method} ${url}`);
     }
@@ -391,6 +390,29 @@ function respond({ status, body, text }) {
 
 // 2026-10-22 was a Thursday.
 export const NOW = new Date(2026, 9, 22, 14, 5, 9);
+
+// A path, not new URL(): happy-dom replaces the global URL, and readFileSync wants Node's.
+const HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "index.html"), "utf8");
+const BODY = HTML.match(/<body>([\s\S]*?)<\/body>/)[1];
+
+/**
+ * Fresh document from src/index.html, fake timers at NOW, fetch served by `daemon`, then a fresh
+ * import of main.ts (a new store and poll), then wait for the startup sequence (catalog, state,
+ * media, stats) and the first render.
+ */
+export async function openPage(daemon = makeDaemon()) {
+  vi.useFakeTimers({ now: NOW, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  globalThis.fetch = window.fetch = daemon.fetch;
+  document.head.innerHTML = "";
+  document.body.innerHTML = BODY;
+  globalThis.__closePage = () => {
+    daemon.closed = true;
+  };
+  vi.resetModules();
+  await import("../src/main.ts");
+  await settle();
+  return daemon;
+}
 
 /** Advance the fake clock by `ms`, running timers and the fetches they start. */
 export async function tick(ms) {

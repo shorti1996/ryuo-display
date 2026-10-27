@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, choose, makeDaemon, openPage, preview, setInput, slot, tick } from "./harness-lit.js";
+import { $, choose, makeDaemon, openPage, preview, setInput, slot, tick } from "./harness.js";
 
 const checkedAttr = (id) => $(id).getAttribute("aria-checked");
 const STANDBY_IN_MIRROR = "the panel shows the second display; turn that off before standby";

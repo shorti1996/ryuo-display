@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, choose, makeDaemon, openPage, setInput, slot, tick } from "./harness-lit.js";
+import { $, choose, makeDaemon, openPage, setInput, slot, tick } from "./harness.js";
 
 describe("overlay colours and filter", () => {
   it("collects colour, filter and opacity edits into one POST 300 ms after the last", async () => {

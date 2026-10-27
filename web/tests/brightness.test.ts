@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { backlightLevel, brightnessLabel, brightnessPercent, brightnessValue, pythonRound } from "../src/brightness.ts";
 // @ts-expect-error The harness is plain JavaScript with no type declarations.
-import * as fake from "./harness-lit.js";
+import * as fake from "./harness.js";
 
 describe("pythonRound", () => {
   it.each([

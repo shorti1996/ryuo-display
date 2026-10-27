@@ -30,7 +30,7 @@ Other distributions, desktops and firmware versions have not been tried.
 | a StatusNotifier system tray | tray icon | KDE Plasma has one. GNOME needs the AppIndicator extension. |
 | `nvidia-smi` (optional) | NVIDIA GPU stats | AMD GPUs are read from sysfs |
 | KDE Plasma 6 on Wayland, an NVIDIA GPU (optional) | [second display](#second-display) | Fedora packages: `krfb`, `util-linux-core` (`unshare`), `pipewire-utils`, `pipewire-gstreamer`, `gstreamer1-plugins-base`, `gstreamer1-plugins-bad-free` (its nvcodec plugin has the `nvh265enc` encoder), `python3-gobject-base` (PyGObject), `android-tools` (adb). The encoder is NVENC, so other GPUs cannot run it. Without PyGObject the panel shows no mouse pointer, and a window moved onto the panel after the start is shown at about 1 frame/s. |
-| `uv`, `node`/`npm` | development only | tests and lint |
+| `uv`, `node`/`npm` | development only | tests, lint, and rebuilding the control page |
 
 `make deps` checks all of these and prints the Fedora package names for anything missing. The
 second-display programs are listed separately and do not fail the check.
@@ -236,12 +236,19 @@ The control page and API listen on `127.0.0.1` only and reject requests whose `H
 ## Development
 
 ```sh
-make test     # Python tests (uv run pytest) and web tests (npm, in web/)
+make test            # Python tests (uv run pytest) and web tests (npm, in web/)
+make build-frontend  # rebuild web/dist/ from web/src/
 make lint
 make format
-make run      # the daemon in the foreground with -v
-make tray     # the tray icon
+make run             # the daemon in the foreground with -v
+make tray            # the tray icon
 ```
+
+ryuod serves the control page from `web/dist/`, which is committed, so an install needs no node.
+After changing anything under `web/src/`, run `make build-frontend` and commit `web/dist/` with the
+change: `make test` fails while `web/dist/` differs from a fresh build. For working on the page,
+`npm run dev` in `web/` serves it at http://127.0.0.1:5173/ with live reload and passes `/api`
+requests to the running ryuod on port 8746.
 
 `make run` refuses while `ryuod.service` is active, because both would want port 8746. Stop the
 service first (`systemctl --user stop ryuod`, or Stop in the tray) and start it again when you are
@@ -259,7 +266,7 @@ done.
 | `ryuo_media.py` | uploads for the daemon: ffprobe check, transcode to HEVC when the panel can't decode the file, still images to a 2240×1080 PNG, adb push |
 | `ryuo.py` | the CLI |
 | `ryuo_tray.py` | the tray icon; talks only to the daemon's HTTP API |
-| `web/` | the control page (`index.html`, plain JavaScript, no external requests) and its tests |
+| `web/` | the control page (Lit + TypeScript, built with Vite into `web/dist/`, which is committed) and its tests |
 | `tests/` | Python tests |
 | `packaging/` | templates for the systemd unit and the desktop entry; `icons/`, the hicolor icon theme files |
 | `70-rog-ryuo-iv.rules` | the udev rule |

@@ -8,6 +8,7 @@ resolves the Future at once, so the tests see exactly what would have gone to th
 import http.client
 import json
 import os
+import re
 import threading
 
 import pytest
@@ -255,20 +256,98 @@ def test_adb_media_failure(monkeypatch):
     assert ryuod.adb_media() is None
 
 
-def test_get_index(api, tmp_path, monkeypatch):
-    page = tmp_path / "index.html"
-    page.write_text("<!doctype html><title>ryuo</title>")
-    monkeypatch.setattr(ryuod, "INDEX", str(page))
-    for path in ("/", "/index.html"):
+@pytest.fixture
+def dist(tmp_path, monkeypatch):
+    """A built page in tmp_path/dist, served as ryuod.DIST, with a file beside it that must stay out of reach."""
+    root = tmp_path / "dist"
+    root.mkdir()
+    (root / "index.html").write_text("<!doctype html><title>ryuo</title>")
+    monkeypatch.setattr(ryuod, "DIST", str(root))
+    (tmp_path / "ryuod.py").write_text("secret = 1\n")
+    return root
+
+
+def test_get_index(api, dist):
+    for path in ("/", "/index.html", "/?tab=overlay"):
         status, resp, body = api.get(path)
         assert status == 200
         assert resp.getheader("Content-Type") == "text/html; charset=utf-8"
+        assert resp.getheader("Cache-Control") == "no-store"
         assert body == b"<!doctype html><title>ryuo</title>"
 
 
+def test_get_committed_build(api):
+    """The committed web/dist/: its index.html and every file it links are served."""
+    status, _, page = api.get("/")
+    assert status == 200
+    linked = re.findall(rb'(?:src|href)="/([^"]+)"', page)
+    assert sorted(linked) == [b"index.css", b"main.js"]
+    for name in linked:
+        assert api.get("/" + name.decode())[0] == 200
+
+
 def test_get_index_missing(api, tmp_path, monkeypatch):
-    monkeypatch.setattr(ryuod, "INDEX", str(tmp_path / "nope.html"))
+    monkeypatch.setattr(ryuod, "DIST", str(tmp_path / "nope"))
     status, _, body = api.get("/")
+    assert status == 404
+    assert body["ok"] is False
+    assert "make build-frontend" in body["error"]
+
+
+@pytest.mark.parametrize(
+    ("name", "ctype"),
+    [
+        ("main.js", "text/javascript; charset=utf-8"),
+        ("main.css", "text/css; charset=utf-8"),
+        ("inter-latin-400-normal.woff2", "font/woff2"),
+        ("main.js.map", "application/json"),
+        ("ICON.SVG", "image/svg+xml"),
+        ("notes.txt", "application/octet-stream"),
+    ],
+)
+def test_get_dist_file(api, dist, name, ctype):
+    # Valid JSON, since Api.request parses an application/json body.
+    (dist / name).write_bytes(b'{"built": 1}')
+    status, resp, body = api.get("/" + name)
+    assert status == 200
+    assert resp.getheader("Content-Type") == ctype
+    assert resp.getheader("Cache-Control") == "no-store"
+    assert body == ({"built": 1} if ctype == "application/json" else b'{"built": 1}')
+
+
+def test_get_dist_file_in_subdirectory(api, dist):
+    (dist / "fonts").mkdir()
+    (dist / "fonts" / "a.woff2").write_bytes(b"font")
+    status, _, body = api.get("/fonts/a.woff2")
+    assert (status, body) == (200, b"font")
+
+
+def test_get_dist_missing_file(api, dist):
+    status, _, body = api.get("/main.js")
+    assert status == 404
+    assert body == {"ok": False, "error": "not found"}
+
+
+@pytest.mark.parametrize(
+    "path", ["/../ryuod.py", "/%2e%2e/ryuod.py", "/%2E%2E%2Fryuod.py", "/fonts/../../ryuod.py", "/%00", "/a%00.js"]
+)
+def test_get_outside_dist(api, dist, path):
+    (dist / "fonts").mkdir()
+    status, _, body = api.get(path)
+    assert status == 404
+    assert body["ok"] is False
+
+
+def test_get_symlink_out_of_dist(api, dist, tmp_path):
+    (dist / "link.js").symlink_to(tmp_path / "ryuod.py")
+    assert api.get("/link.js")[0] == 404
+
+
+@pytest.mark.parametrize("path", ["/fonts", "/fonts/", "/fonts/.", "/."])
+def test_get_dist_directory(api, dist, path):
+    (dist / "fonts").mkdir()
+    (dist / "fonts" / "a.woff2").write_bytes(b"font")
+    status, _, body = api.get(path)
     assert status == 404
     assert body["ok"] is False
 

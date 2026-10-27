@@ -1,4 +1,4 @@
-.PHONY: help install install-udev uninstall run tray receiver test test-python test-frontend lint format deps
+.PHONY: help install install-udev uninstall run tray receiver test test-python test-frontend build-frontend lint format deps
 
 MAKEFILE := $(abspath $(lastword $(MAKEFILE_LIST)))
 # Absolute path of this checkout; the unit and launcher run the code from here.
@@ -143,18 +143,32 @@ test-python:
 	uv run pytest
 
 test-frontend:
-	# Run the web page tests
-	cd web && npm ci && npm test
+	# Typecheck and test the control page, then fail if the committed web/dist/ differs from a fresh build
+	npm --prefix $(APPDIR)/web ci
+	npm --prefix $(APPDIR)/web run typecheck
+	npm --prefix $(APPDIR)/web test
+	npm --prefix $(APPDIR)/web run build
+	@git -C $(APPDIR) diff --stat --exit-code -- web/dist || \
+		{ echo "web/dist/ is stale: commit the rebuilt files (make build-frontend)"; exit 1; }
+	@new=$$(git -C $(APPDIR) ls-files --others --exclude-standard -- web/dist); \
+		if [ -n "$$new" ]; then echo "web/dist/ has files git does not track: $$new"; exit 1; fi
+
+build-frontend:
+	# Build the control page from web/src/ into web/dist/, which ryuod serves; commit the result
+	npm --prefix $(APPDIR)/web ci
+	npm --prefix $(APPDIR)/web run build
 
 lint:
 	# Check lint and formatting without changing files
 	uv run ruff check .
 	uv run ruff format --check .
+	npm --prefix $(APPDIR)/web run lint
 
 format:
 	# Reformat and apply safe lint fixes
 	uv run ruff format .
 	uv run ruff check --fix .
+	npm --prefix $(APPDIR)/web run format
 
 deps:
 	# Check runtime deps (exit 1 if one is missing) and dev tools, naming the Fedora package

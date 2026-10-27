@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, CUSTOM, makeDaemon, openPage, preview, tick } from "./harness-lit.js";
+import { $, CUSTOM, makeDaemon, openPage, preview, tick } from "./harness.js";
 
 const TABS = ["overlay", "background", "mirror", "app"];
 const selectedTab = () => TABS.filter((t) => $("tab-" + t).getAttribute("aria-selected") === "true");

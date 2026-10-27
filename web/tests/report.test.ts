@@ -1,9 +1,9 @@
 // @vitest-environment node
 /**
  * The outcome sentences (report.ts) against the old page's report() (web/index.html, line 645
- * at eab6057). Each reply is given to both; the old one shows its sentence through say(), the
- * new one returns it. The expected text is also written out, so the table still says what the
- * user reads once the old page is deleted: the switch commit drops `oldReport` and keeps the rest.
+ * at eab6057, kept in fixtures/old-page.js). Each reply is given to both; the old one shows its
+ * sentence through say(), the new one returns it. The expected text is also written out, so the
+ * table says what the user reads without running the old code.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import type { Outcome } from "../src/api-types.ts";
 import { report } from "../src/report.ts";
 
-const OLD_PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.html"), "utf8");
+const OLD_PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "old-page.js"), "utf8");
 const OLD_SOURCE = OLD_PAGE.match(/\nfunction report\(j, done, extra\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
 
 /** The old report(), run with a say() that hands back what it was told to show. */
@@ -82,7 +82,7 @@ const CASES: [string, Partial<Outcome>, string | undefined, string, string][] = 
 ];
 
 describe("report", () => {
-  it("finds the old report() in web/index.html", () => {
+  it("finds the old report() in fixtures/old-page.js", () => {
     expect(OLD_SOURCE).toContain("cooler confirmed");
   });
 
