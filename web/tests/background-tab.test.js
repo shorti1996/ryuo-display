@@ -559,6 +559,53 @@ describe("Delete", () => {
     await tick(0);
     expect(state(CUSTOM[1])).toEqual(["", "del", `Delete ${CUSTOM[1]}`]);
   });
+
+  // The old deleteMedia's renderMedia after a failure rebuilt the failed file's tile too: a plain,
+  // enabled Delete whose next click only arms it.
+  it("leaves the failed file's own Delete plain, so the next click asks again", async () => {
+    const daemon = await openPage();
+    daemon.replyOnce("POST /api/media/delete", { status: 503, body: { ok: false, error: "adb: no devices" } });
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[0]).click();
+    expect(state(CUSTOM[0])[0]).toBe("Deleting…");
+    expect(delButton(CUSTOM[0]).disabled).toBe(true);
+    await tick(0);
+    expect($("result").textContent).toBe(`${CUSTOM[0]} not deleted: adb: no devices`);
+    expect(state(CUSTOM[0])).toEqual(["", "del", `Delete ${CUSTOM[0]}`]);
+    expect(delButton(CUSTOM[0]).disabled).toBe(false);
+    delButton(CUSTOM[0]).click();
+    await tick(0);
+    expect(state(CUSTOM[0])[0]).toBe("Really delete?");
+    expect(daemon.posts("/api/media/delete")).toHaveLength(1);
+  });
+
+  // The success path disarms through the new media list in willUpdate, not through the fix's
+  // `false`; the old page's renderMedia after the delete dropped it the same way.
+  it("drops a Delete armed during another file's delete that went through", async () => {
+    const daemon = await openPage();
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[1]).click();
+    expect(state(CUSTOM[1])[0]).toBe("Really delete?");
+    await tick(0);
+    expect(tile(CUSTOM[0])).toBeUndefined();
+    expect(state(CUSTOM[1])).toEqual(["", "del", `Delete ${CUSTOM[1]}`]);
+    delButton(CUSTOM[1]).click();
+    await tick(0);
+    expect(daemon.posts("/api/media/delete")).toEqual([{ names: [CUSTOM[0]] }]);
+  });
+
+  // ryuod down is a fetch that throws, not a refusal; deleteMedia's catch returns false for both.
+  it("drops a Delete armed during a delete ryuod never answered", async () => {
+    const daemon = await openPage();
+    delButton(CUSTOM[0]).click();
+    daemon.down = true;
+    delButton(CUSTOM[0]).click();
+    delButton(CUSTOM[1]).click();
+    await tick(0);
+    expect($("result").textContent).toBe(`${CUSTOM[0]} not deleted: Failed to fetch`);
+    expect(state(CUSTOM[1])).toEqual(["", "del", `Delete ${CUSTOM[1]}`]);
+  });
 });
 
 describe("the hero, as the old renderHero drew it", () => {
