@@ -11,4 +11,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 web/node_modules/
+# The built page. Ignored only while the Lit port is in progress: the switch commit removes this
+# line and commits web/dist/, so `make install` needs no node (docs/009-frontend-stack).
+web/dist/
 .idea/

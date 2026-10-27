@@ -4,7 +4,7 @@
  */
 import { expect, it } from "vitest";
 
-import { makeDaemon, openPage } from "./harness.js";
+import { makeDaemon, openPage } from "./harness-lit.js";
 
 function takeStray() {
   return globalThis.__strayRequests.splice(0);

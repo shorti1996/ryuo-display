@@ -1,0 +1,22 @@
+{
+  // Type checking only: Vite (esbuild) strips the types when it serves or builds the page.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true,
+    // Lit's reactive properties are accessors on the prototype; a class field would shadow them,
+    // so the elements declare them with `declare` and this stays at the ES2022 default.
+    "useDefineForClassFields": true
+  },
+  "include": ["src", "tests/**/*.ts", "vite.config.ts"]
+}

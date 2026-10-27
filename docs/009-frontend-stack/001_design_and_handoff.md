@@ -191,3 +191,19 @@ changed it, and those changes must be ported into the new page.
 ## Open questions
 
 - None at design time. Anything found during the port goes here with the step it belongs to.
+- Step 1: `prefs.test.js` and `sync.test.js` stay on the old harness. Every case in them also
+  reads slots, the preview, colours, brightness or the playlist, which steps 2 and 4 port.
+  `features.test.js` mixes the tray and desktop cases with panel, standby and preset cases, so
+  it moves with step 4. Its tray cases pass against the new page when run on the new harness.
+- Step 1: the Units card (°C/°F, memory MHz) sits in the Overlay tab, not the App tab. It stays
+  there, as static markup, so the page looks the same; `actions.sendPrefs` is ready and the
+  Overlay tab renders the card in step 2.
+- Step 1: the old tests read the DOM right after a click or key press, with no await. Elements
+  therefore render synchronously after a store change or their own state change
+  (`RyuoElement.flush()`, which calls Lit's `performUpdate()`), not at the next microtask.
+- Step 1: the poll merge compares each key with ryuod's last value (`state.mergeAround`), as
+  the old `seen` did, beside the editing set. Without it a POST that failed would be undone by
+  the next poll (`sync.test.js`, "is not re-applied over the page's own failed edit").
+- Step 1: elements get the store through an `app` property set by `main.ts`, not a module
+  import. Custom element names stay defined across the tests' `vi.resetModules()`, so the
+  first test's classes serve every later one; only a property reaches each test's fresh store.
