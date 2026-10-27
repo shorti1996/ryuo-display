@@ -183,8 +183,10 @@ changed it, and those changes must be ported into the new page.
    127.0.0.1:8746 (check the Network panel).
 4. `make test-frontend` fails when `web/dist/` is stale: edit a source file, do not rebuild, run
    it, see it fail; rebuild, see it pass.
-5. Every id-based control the old tests touch still exists; the editing guard is the only
-   mechanism that suppresses a poll merge.
+5. Every id-based control the old tests touch still exists. A poll merge is suppressed by
+   exactly two rules, both in `state.ts`: the key is in `editing`, or ryuod's value for the key
+   is the one the page last saw or sent (the old page's `seen`, kept because
+   `sync.test.js` "is not re-applied over the page's own failed edit" needs it).
 6. The page at http://127.0.0.1:8746/ looks the same as before the port on the four tabs, at
    desktop and at 400 px width.
 
@@ -207,3 +209,10 @@ changed it, and those changes must be ported into the new page.
 - Step 1: elements get the store through an `app` property set by `main.ts`, not a module
   import. Custom element names stay defined across the tests' `vi.resetModules()`, so the
   first test's classes serve every later one; only a property reaches each test's fresh store.
+- Step 2 must hold every overlay key during the overlay debounce (items, colours, filter,
+  statsVisible), not only the key edited. The old page compared per group, the store compares
+  per key; without the wider hold the 1 s poll copies the untouched keys and the POST carries
+  them (`sync.test.js`, "a slot change in its debounce wins").
+- Step 1 risk, unproven: the left-click select's hold is released only on `blur`. The old page
+  read `document.activeElement` on every poll and recovered from a missed blur by itself. If a
+  focused control ever stays held, add a poll-time check against `activeElement`.
