@@ -261,7 +261,9 @@ is merged and its card, chip and overlay note are ported (`protection.ts`).
 - Step 5: an armed Delete ("Really delete?") is dropped when Apply or Replace plays a file, as the
   old page's tile rebuild did. The trigger is `AppState.applied`, a count `showOnPanel` raises
   after ryuod takes the file; the Background tab disarms when it changes. A failed Apply keeps the
-  armed button, as the old page's did.
+  armed button, as the old page's did. A failed delete drops every armed Delete, as the old
+  page's `deleteMedia` did by re-rendering the tiles after it; a delete that went through does
+  the same through the new media list.
 - Step 5: `tests/harness.js` stays out of Biome's scope, as it was. `harness-lit.js` was in it;
   `harness.js` with its `openPage` merged in would need Biome's reformatting of the whole fake
   ryuod, which no step asked for.

@@ -551,6 +551,14 @@ describe("Delete", () => {
     await tick(0);
     expect(daemon.posts("/api/media/delete")).toEqual([{ names: [CUSTOM[0]] }]);
   });
+
+  it("drops a Delete armed during another file's failed delete", async () => {
+    const daemon = await openPage();
+    daemon.replyOnce("POST /api/media/delete", { status: 503, body: { ok: false, error: "adb: no devices" } });
+    delButton(CUSTOM[0]).click(); delButton(CUSTOM[0]).click(); delButton(CUSTOM[1]).click();
+    await tick(0);
+    expect(state(CUSTOM[1])).toEqual(["", "del", `Delete ${CUSTOM[1]}`]);
+  });
 });
 
 describe("the hero, as the old renderHero drew it", () => {

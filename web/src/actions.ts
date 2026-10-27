@@ -527,8 +527,11 @@ export function createActions(store: Store, poll: Poll) {
     if (store.state.preview === name) closePreview();
   }
 
-  /** Delete `name` from the cooler; the tiles and the playlist follow ryuod's reply. */
-  async function deleteMedia(name: string): Promise<void> {
+  /**
+   * Delete `name` from the cooler; the tiles and the playlist follow ryuod's reply. Returns false
+   * when the POST failed, with the reason in the toast.
+   */
+  async function deleteMedia(name: string): Promise<boolean> {
     try {
       const reply = await postMediaDelete([name]);
       // Only the playlist: the rest of reply.config may predate an overlay edit still in its debounce.
@@ -540,8 +543,10 @@ export function createActions(store: Store, poll: Poll) {
       if (preview !== null && reply.deleted.includes(preview)) closePreview();
       const { text, bad, detail } = deleteText(reply);
       store.say(text, bad, detail);
+      return true;
     } catch (error) {
       fail(store, error, `${name} not deleted`);
+      return false;
     }
   }
 

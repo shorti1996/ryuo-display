@@ -87,7 +87,10 @@ export class RyuoBackgroundTab extends RyuoElement {
     this.deleting = name;
     this.flush();
     try {
-      await this.app?.actions.deleteMedia(name);
+      // The old page rebuilt its tiles after a failed delete too, which dropped a Delete armed on
+      // another file meanwhile. A delete that went through brings a new media list, which does
+      // the same in willUpdate.
+      if ((await this.app?.actions.deleteMedia(name)) === false) this.#disarm();
     } finally {
       this.deleting = null;
       this.flush();
