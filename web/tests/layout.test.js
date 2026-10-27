@@ -149,7 +149,7 @@ describe("result toast", () => {
     expect($("toast").hidden).toBe(false);
     await tick(6000);
     expect($("toast").hidden).toBe(true);
-    expect($("result").textContent).toBe("Media list from conn");
+    expect($("result").textContent).toBe("Media list refreshed: 2 files on the cooler, 2 presets");
     expect(d.gets("/api/media")).toHaveLength(2);
   });
 

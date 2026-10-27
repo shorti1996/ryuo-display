@@ -22,7 +22,7 @@ describe("changing a slot", () => {
       contentColor: "#FFFFFF",
       filter: { on: false, opacity: 100 },
     }]);
-    expect($("result").textContent).toBe("Overlay: POST preset — acked by the cooler");
+    expect($("result").textContent).toBe("2 overlay changes — cooler confirmed");
   });
 
   it("sends an emptied slot as an empty string", async () => {
@@ -69,7 +69,7 @@ describe("changing a slot", () => {
     await openPage(makeDaemon({ device: { connected: false } }));
     choose(slot(4), "GPU Load");
     await tick(300);
-    expect($("result").textContent).toBe("Overlay: POST preset — saved; the cooler is not connected, applied on reconnect");
+    expect($("result").textContent).toBe("Slot 5: GPU Load saved; applies when the cooler reconnects");
   });
 });
 

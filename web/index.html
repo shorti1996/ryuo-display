@@ -167,6 +167,8 @@ button:disabled > .track { opacity: .5; }
 }
 .pvbar #pvName { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 12px var(--mono); color: var(--text); }
 .pvbar #pvNote { font-size: 12px; color: var(--label); }
+.pvbar #pvAsk { font-size: 13px; color: var(--text); }
+.pvbar .ask-short { display: none; }
 .pvbar .btn { height: 36px; }
 .pvbar .btn.icon { width: 36px; background: transparent; border-color: rgba(255, 255, 255, .14); }
 .mirror-view { position: absolute; inset: 0; z-index: 3; background: #0B0D12; font-family: var(--ui); }
@@ -189,6 +191,10 @@ button:disabled > .track { opacity: .5; }
 @container (max-width: 560px) {
   .pvbar { gap: 8px; bottom: 8px; padding-left: 10px; }
   .pvbar #pvNote { display: none; }
+  /* Asking: the short question, and no PREVIEW badge, so the bar keeps to one line. */
+  .pvbar.asking .pv-badge, .pvbar .ask-long { display: none; }
+  .pvbar .ask-short { display: inline; }
+  .pvbar.asking .btn:not(.icon) { padding: 0 10px; }
   .chip, .hero-status { top: 8px; }
   .chip { left: 8px; }
   .mirror-view .caption { left: 8px; bottom: 6px; max-width: calc(100% - 16px); font-size: 11px; }
@@ -403,6 +409,10 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
       <span id="pvName"></span>
       <span id="pvNote">not on the panel yet</span>
       <button class="btn primary" id="pvApply" type="button">Apply</button>
+      <!-- Shown in place of the note and Apply when Apply would replace a playlist of several files. -->
+      <span id="pvAsk" hidden><span class="ask-long" id="pvAskLong"></span><span class="ask-short" id="pvAskShort"></span></span>
+      <button class="btn primary" id="pvReplace" type="button" hidden>Replace</button>
+      <button class="btn" id="pvCancel" type="button" hidden>Cancel</button>
       <button class="btn icon" id="pvClose" type="button" aria-label="Back to live view">
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
@@ -619,21 +629,31 @@ function debounce(fn, ms) {
 const TOAST_MS = 6000;  // how long a message that is not an error stays on screen
 let toastTimer;
 // Sets the colour on every write, so a success after an error is not left in red.
-function say(text, bad) {
+// `detail` (the device commands sent, for debugging) goes in the toast's tooltip, not its text.
+function say(text, bad, detail) {
   $("result").textContent = text; $("result").style.color = bad ? "var(--bad)" : "var(--muted)";
   $("toast").hidden = !text; $("toast").classList.toggle("bad", !!bad);
+  $("toast").title = detail || "";
   clearTimeout(toastTimer);
   if (text && !bad) toastTimer = setTimeout(() => { $("toast").hidden = true; }, TOAST_MS);
 }
-function showResult(j, what) {
-  if (j instanceof Error) { say(`${what}: ${j.message}`, true); return; }
-  const sent = (j.sent || []).join(", ");
-  const how = j.heldByStandby ? "saved; applies when the panel turns on"
-    : j.heldByDisplay ? "saved; applies when the second display is off"
-    : j.applied === false ? "saved; the cooler is not connected, applied on reconnect"
-    : !sent ? "saved" : (j.acked ? "acked by the cooler" : "sent, no ack");
-  say(`${what}: ${sent || "nothing sent"} — ${how}${j.restartsVideo ? " (video restarted)" : ""}`);
+/**
+ * A change's outcome in the user's words. `done` names the change with its value ("Brightness
+ * 80 %"); the reply says whether the cooler has it, or why it waits. `extra` follows a change
+ * that is only saved and needs no command ("the panel shows it from the next sample").
+ */
+function report(j, done, extra) {
+  const sent = j.sent || [];
+  const text = j.heldByStandby ? `${done} saved; applies when the panel turns on`
+    : j.heldByDisplay ? `${done} saved; applies when the second display is off`
+    : j.applied === false ? `${done} saved; applies when the cooler reconnects`
+    : !sent.length ? `${done} saved${extra ? "; " + extra : ""}`
+    : !j.acked ? `${done} sent; the cooler did not confirm it`
+    : `${done} — cooler confirmed${j.restartsVideo ? ", video restarted" : ""}`;
+  say(text, false, sent.length ? "Sent: " + sent.join(", ") : "");
 }
+/** A refusal or failure: what did not happen, then ryuod's reason. */
+function fail(e, what) { say(`${what}: ${e.message}`, true); }
 
 /* ---------- tabs ---------- */
 function selectTab(id, focus) {
@@ -662,7 +682,10 @@ function buildSlots() {
     const num = document.createElement("span"); num.className = "num"; num.setAttribute("aria-hidden", "true"); num.textContent = i + 1;
     const lab = document.createElement("label"); lab.htmlFor = "slot" + i; lab.textContent = SLOT_POS[i];
     const sel = document.createElement("select"); sel.id = "slot" + i; sel.setAttribute("aria-label", "Slot " + name);
-    sel.addEventListener("change", () => { items[i] = sel.value; fillSlotOptions(); renderPreview(); sendOverlay(); });
+    sel.addEventListener("change", () => {
+      items[i] = sel.value; fillSlotOptions(); renderPreview();
+      noteOverlay("slot" + i, `Slot ${i + 1}: ${sel.value || "empty"}`); sendOverlay();
+    });
     sel.addEventListener("focus", () => setHot(i));
     sel.addEventListener("blur", () => setHot(null));
     row.addEventListener("mouseenter", () => setHot(i));
@@ -833,15 +856,19 @@ function syncLabels() {
   $("brightness").title = pctMode ? `${b} % of the full backlight`
     : `${b} of 102 on the device scale, backlight ${level}/255`;
 }
+const overlayEdits = new Map();  // input -> what it changed, since the last overlay POST
+function noteOverlay(key, text) { overlayEdits.set(key, text); }
 const sendOverlay = debounce(async () => {
+  const n = overlayEdits.size, done = n === 1 ? [...overlayEdits.values()][0] : n ? `${n} overlay changes` : "Overlay";
+  overlayEdits.clear();
   inflight.overlay++;
   try {
     const j = await api("/api/overlay", {
       items, statsVisible: $("statsOn").checked, titleColor: $("titleColor").value.toUpperCase(), contentColor: $("contentColor").value.toUpperCase(),
       filter: { on: $("filterOn").checked, opacity: +$("opacity").value },
     });
-    config = j.config; markSeen(config, "overlay"); showResult(j, "Overlay");
-  } catch (e) { showResult(e, "Overlay"); } finally { inflight.overlay--; }
+    config = j.config; markSeen(config, "overlay"); report(j, done);
+  } catch (e) { fail(e, `${done} not saved`); } finally { inflight.overlay--; }
 }, 300);
 const sendBrightness = debounce(async () => {
   const v = +$("brightness").value;
@@ -856,10 +883,13 @@ const sendBrightness = debounce(async () => {
         $("brightness").value = j.percent; syncLabels();
       }
     }
-    showResult(j, "Brightness");
-  } catch (e) { showResult(e, "Brightness"); } finally { inflight.brightness--; }
+    report(j, `Brightness ${pctMode ? (j.percent ?? v) : brightPct(v)} %`);
+  } catch (e) { fail(e, "Brightness not changed"); } finally { inflight.brightness--; }
 }, 150);
 async function sendPrefs(body) {
+  const done = "tempUnit" in body ? `Temperature unit ${body.tempUnit === "Fahrenheit" ? "°F" : "°C"}` : `Memory MHz ${body.memoryMHz}`;
+  const extra = "memoryMHz" in body
+    ? (body.memoryMHz ? "the panel shows it from the next sample" : "Memory Frequency is hidden from the slot lists") : "";
   inflight.units++;
   try {
     const j = await api("/api/prefs", body);
@@ -869,8 +899,8 @@ async function sendPrefs(body) {
     document.querySelectorAll('input[name=unit]').forEach((r) => { r.checked = r.value === config.tempUnit; });
     $("memMHz").value = config.memoryMHz;
     markSeen(config, "units");
-    fillSlotOptions(); renderPreview(); showResult(j, "Units"); refreshCatalog();
-  } catch (e) { showResult(e, "Units"); } finally { inflight.units--; }
+    fillSlotOptions(); renderPreview(); report(j, done, extra); refreshCatalog();
+  } catch (e) { fail(e, `${done} not saved`); } finally { inflight.units--; }
 }
 
 /* ---------- media ---------- */
@@ -888,6 +918,7 @@ let previewName = null;        // the file previewed in the hero, or null for th
 let selected = [];             // the playlist as ticked; config.media is the one the daemon has
 const mediaUrl = (kind, name) => `/api/media/${kind}?name=${encodeURIComponent(name)}`;
 const isImage = (name) => /\.(png|jpe?g)$/i.test(name);
+const count = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 function fmtSize(n) {
   if (n == null) return "";
   if (n < 1e6) return Math.max(1, Math.round(n / 1e3)) + " kB";
@@ -1005,24 +1036,34 @@ async function deleteMedia(name) {
     if (config) { config.media = j.config.media; selected = config.media.slice(); }
     if (j.deleted.includes(previewName)) closePreview();
     renderMedia(); renderHero();
-    if (j.remaining.length) { say(`Delete: ${j.remaining.join(", ")} is still on the cooler`, true); return; }
-    let text = `Deleted ${j.deleted.join(", ")}`;
-    const when = j.heldByStandby ? ", applies when the panel turns on" : j.heldByDisplay ? ", applies when the second display is off"
-      : j.applied === false ? ", sent when the cooler reconnects" : "";
-    if (j.restartsVideo || j.heldByDisplay || j.heldByStandby) text += `; playlist now ${j.config.media.join(", ")}${when}`;
-    say(text);
-  } catch (e) { showResult(e, "Delete"); renderMedia(); }
+    if (j.remaining.length) { say(`${j.remaining.join(", ")} is still on the cooler; the delete did not take`, true); return; }
+    let text = `Deleted ${j.deleted.join(", ")} from the cooler`;
+    const when = j.heldByStandby ? ", from when the panel turns on" : j.heldByDisplay ? ", from when the second display is off"
+      : j.applied === false ? ", from when the cooler reconnects" : "";
+    // The deleted file was playing: ryuod fell back to the rest of the playlist, or the first preset.
+    if (j.restartsVideo || j.heldByDisplay || j.heldByStandby) text += `; the panel plays ${j.config.media.join(", ")} instead${when}`;
+    say(text, false, (j.sent || []).length ? "Sent: " + j.sent.join(", ") : "");
+  } catch (e) { fail(e, `${name} not deleted`); renderMedia(); }
 }
 async function loadMedia(refresh) {
   try {
     const j = await api("/api/media" + (refresh ? "?refresh=1" : ""));
     mediaLists = j; renderMedia(); renderHero();
-    if (refresh) say(`Media list from ${j.source}`);
-  } catch (e) { showResult(e, "Media list"); }
+    if (refresh) {
+      say(`Media list refreshed: ${count(j.custom.length, "file")} on the cooler, ${count(j.preset.length, "preset")}`, false,
+        `Listed by ${j.source === "adb" ? "adb" : "the cooler's HID reply"}`);
+    }
+  } catch (e) { fail(e, refresh ? "Media list not refreshed" : "Media list not loaded"); }
 }
 /** The ticked files in list order: Custom first, then the presets, as on the page. */
 function playlist() {
   return [...mediaLists.custom, ...mediaLists.preset].filter((n) => selected.includes(n));
+}
+/** The playlist for a message: the file alone, or the count and the play mode as its select shows it. */
+function playlistText(media) {
+  const mode = $("playMode").selectedOptions ? $("playMode").selectedOptions[0] : null;
+  return media.length === 1 ? `Background ${media[0]}`
+    : `Playlist of ${media.length} files (${mode ? mode.textContent : $("playMode").value})`;
 }
 /** Set the playlist boxes from `selected`, without rebuilding the tiles. */
 function syncTicks() {
@@ -1034,33 +1075,41 @@ async function play() {
   if (!media.length) {
     // The panel keeps playing the old playlist, so the boxes go back to it.
     if (config) { selected = config.media.slice(); syncTicks(); }
-    showResult(new Error("pick at least one file"), "Play");
+    say("Keep at least one file in the playlist", true);
     return;
   }
   inflight.media++;
   try {
     const j = await api("/api/media/select", { media, playMode: $("playMode").value });
-    config = j.config; markSeen(config, "media"); showResult(j, "Play"); markTiles(); renderHero();
-  } catch (e) { showResult(e, "Play"); } finally { inflight.media--; }
+    config = j.config; markSeen(config, "media"); report(j, playlistText(media)); markTiles(); renderHero();
+  } catch (e) { fail(e, "Playlist not changed"); } finally { inflight.media--; }
 }
 const playSoon = debounce(play, PLAY_DEBOUNCE_MS);
+let applyAsking = false;  // the preview bar asks before Apply replaces a playlist of several files
+/** Apply: at once, unless the playlist has other files that it would drop; then the bar asks first. */
+function applyClick() {
+  if (config && config.media.length > 1) { applyAsking = true; renderHero(); $("pvReplace").focus(); return; }
+  showOnPanel();
+}
 async function showOnPanel() {
+  applyAsking = false; renderHero();
   const name = previewName;
   playSoon.cancel();
   inflight.media++;
   try {
     const j = await api("/api/media/select", { media: [name], playMode: $("playMode").value });
     config = j.config; selected = config.media.slice(); markSeen(config, "media");
-    showResult(j, "Play");
+    report(j, playlistText([name]));
     if (previewName === name) closePreview();
     renderMedia(); renderHero();
-  } catch (e) { showResult(e, "Play"); } finally { inflight.media--; }
+  } catch (e) { fail(e, `${name} not applied`); } finally { inflight.media--; }
 }
 
 /* ---------- hero ---------- */
 let heroName = null;  // the file loaded into the hero's <video> or <img>
 const liveName = () => (config && config.media.length ? config.media[0] : null);
 function showPreview(name) {
+  applyAsking = false;
   // A click on the file the hero already shows live goes back to the live view.
   previewName = name === liveName() && !displayWant ? null : name;
   markTiles(); renderHero();
@@ -1070,6 +1119,7 @@ function showPreview(name) {
   if (h.scrollIntoView) h.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 function closePreview() {
+  applyAsking = false;
   previewName = null;
   markTiles(); renderHero();
 }
@@ -1133,6 +1183,12 @@ function renderHero() {
     // The visible label is just "Apply"; the name and tooltip say what it applies.
     $("pvApply").setAttribute("aria-label", `Apply: show ${previewName} on the panel`);
     $("pvApply").title = `Apply: show ${previewName} on the panel`;
+    const n = config ? config.media.length : 0;
+    $("pvAskLong").textContent = `Replace the ${n}-file playlist with this file?`;
+    $("pvAskShort").textContent = `Replace ${n} files?`;
+    $("previewBar").classList.toggle("asking", applyAsking);
+    for (const id of ["pvNote", "pvApply", "pvClose"]) $(id).hidden = applyAsking;
+    for (const id of ["pvAsk", "pvReplace", "pvCancel"]) $(id).hidden = !applyAsking;
     $("pvNote").textContent = panelOn === false ? "panel in standby"
       : config && config.media.includes(previewName) ? "in the playlist" : "not on the panel yet";
   }
@@ -1189,7 +1245,7 @@ function onUploadState(u) {
 }
 function upload(f) {
   if (!f) return;
-  if (upXhr || upActive) { showResult(new Error("another video is still being processed"), "Upload"); return; }
+  if (upXhr || upActive) { say("Wait for the current upload to finish first", true); return; }
   const xhr = upXhr = new XMLHttpRequest();
   upCancelled = false;
   xhr.open("POST", "/api/media/upload?fit=" + encodeURIComponent($("upFit").value));
@@ -1283,10 +1339,10 @@ async function sendDisplay(on) {
   try {
     const j = await api("/api/display", { on });
     renderDisplay(j.display);
-    say(on ? "Second display: starting" : "Second display: stopping");
+    say(on ? "Second display starting" : "Second display stopping; removing the virtual monitor takes up to about 10 s");
   } catch (e) {
     displayWant = !on; renderDisplaySwitch(); renderHero();
-    showResult(e, "Second display");
+    fail(e, on ? "Second display not started" : "Second display not stopped");
   } finally { displaySending = false; }
 }
 
@@ -1314,13 +1370,11 @@ async function sendPanel(on) {
   try {
     const j = await api("/api/panel", { on });
     panelOn = j.panel.on;
-    const what = on ? "on" : "standby";
-    say(!j.changed ? `Panel: already ${on ? "on" : "in standby"}`
-      : j.applied === false ? `Panel: ${what}; the cooler is not connected, applied on reconnect`
-      : `Panel: ${what} — ${j.acked ? "acked by the cooler" : "sent, no ack"}`);
+    if (!j.changed) say(`The panel is already ${on ? "on" : "in standby"}`);
+    else report(j, on ? "Panel on" : "Panel in standby");
   } catch (e) {
     panelOn = !on;
-    showResult(e, "Panel");
+    fail(e, on ? "Panel not turned on" : "Panel not put in standby");
   } finally {
     panelSending = false;
     renderDisplaySwitch(); renderHero();
@@ -1351,13 +1405,13 @@ async function askAgain() {
     renderDesktop(j.desktop);
     say(j.removed ? "Screen-share choice deleted; the next start of the second display asks again"
       : "No screen-share choice was saved; the next start asks anyway");
-  } catch (e) { showResult(e, "Ask again"); } finally { askSending = false; renderDesktop(desktop); }
+  } catch (e) { fail(e, "Screen-share choice not deleted"); } finally { askSending = false; renderDesktop(desktop); }
 }
 async function openDisplaySettings() {
   try {
     const j = await api("/api/display/open-settings", {});
-    say(`Opened Display Configuration (${j.command.join(" ")})`);
-  } catch (e) { showResult(e, "Display Configuration"); }
+    say("Display Configuration opened; Virtual-RYUO is in the monitor list", false, "Ran " + j.command.join(" "));
+  } catch (e) { fail(e, "Display Configuration not opened"); }
 }
 
 /* ---------- tray settings ---------- */
@@ -1417,19 +1471,34 @@ function addStep(text) {
   if (!/^\s*\d+\s*$/.test(text) || v < 1 || v > 100) why = "a step must be a whole number from 1 to 100";
   else if (steps.includes(v)) why = `${v} % is already a step`;
   else if (steps.length >= TRAY_STEPS_MAX) why = `the tray menu takes at most ${TRAY_STEPS_MAX} steps`;
-  if (why) { showResult(new Error(why), "Tray"); return; }
+  if (why) { fail(new Error(why), "Step not added"); return; }
   stepAdding = false;
   sendTray({ brightnessSteps: [...steps, v].sort((a, b) => a - b) });
 }
+/** The tray change in body, for its messages: [done, not done]. */
+function trayText(body) {
+  // ryuo_tray.py reads state.json every 3 s; the autostart entry counts from the next login.
+  if ("autostart" in body) {
+    return [`The tray ${body.autostart ? "starts" : "no longer starts"} with the desktop session, from the next login`,
+      "Start with the desktop session not changed"];
+  }
+  if ("leftClick" in body) {
+    return [`Tray left-click set to ${TRAY_CLICK_LABELS[body.leftClick] || body.leftClick}; the tray follows within 3 s`,
+      "Tray left-click not changed"];
+  }
+  return [`Tray brightness steps set to ${body.brightnessSteps.join(", ")} %; the tray menu follows within 3 s`,
+    "Tray brightness steps not changed"];
+}
 async function sendTray(body) {
+  const [done, notDone] = trayText(body);
   traySending++;
   try {
     const j = await api("/api/tray", body);
     renderTray(j.tray);
-    say("Tray: saved; the tray picks it up within 3 s");
+    say(done);
   } catch (e) {
     renderTray(tray);  // back to the settings ryuod has
-    showResult(e, "Tray");
+    fail(e, notDone);
   } finally { traySending--; }
 }
 /** The poll's tray settings, unless the user is changing them. */
@@ -1501,8 +1570,16 @@ buildSlots(); buildPreview();
 for (const t of TABS) $("tab-" + t).addEventListener("click", () => selectTab(t));
 $("tabs").addEventListener("keydown", tabKeys);
 $("connPill").addEventListener("click", () => selectTab("app", true));
-for (const id of ["statsOn", "titleColor", "contentColor", "filterOn", "opacity"]) {
-  $(id).addEventListener("input", () => { syncLabels(); renderPreview(); sendOverlay(); });
+// What each overlay input changed, for the message after the POST.
+const OVERLAY_EDITS = {
+  statsOn: () => ($("statsOn").checked ? "Stats overlay shown" : "Stats overlay hidden, slot choices kept"),
+  titleColor: () => `Title colour ${$("titleColor").value.toUpperCase()}`,
+  contentColor: () => `Value colour ${$("contentColor").value.toUpperCase()}`,
+  filterOn: () => `Coverage animation ${$("filterOn").checked ? "on" : "off"}`,
+  opacity: () => `Coverage opacity ${$("opacity").value} %`,
+};
+for (const id of Object.keys(OVERLAY_EDITS)) {
+  $(id).addEventListener("input", () => { syncLabels(); renderPreview(); noteOverlay(id, OVERLAY_EDITS[id]()); sendOverlay(); });
 }
 $("brightness").addEventListener("input", () => { syncLabels(); sendBrightness(); });
 for (const id of ["brightness", "opacity"]) $(id).addEventListener("pointerdown", () => { dragging = $(id); });
@@ -1510,7 +1587,9 @@ for (const ev of ["pointerup", "pointercancel"]) window.addEventListener(ev, () 
 $("refresh").addEventListener("click", () => loadMedia(true));
 $("play").addEventListener("click", play);
 $("playMode").addEventListener("change", playSoon);
-$("pvApply").addEventListener("click", showOnPanel);
+$("pvApply").addEventListener("click", applyClick);
+$("pvReplace").addEventListener("click", showOnPanel);
+$("pvCancel").addEventListener("click", () => { applyAsking = false; renderHero(); $("pvApply").focus(); });
 $("pvClose").addEventListener("click", closePreview);
 $("heroVideo").addEventListener("loadeddata", () => { $("heroStatus").textContent = ""; });
 $("heroVideo").addEventListener("error", () => { if ($("heroVideo").getAttribute("src")) previewFailed(); });

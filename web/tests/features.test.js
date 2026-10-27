@@ -34,7 +34,7 @@ describe("panel switch", () => {
     expect($("panelOffView").hidden).toBe(false);
     expect($("standbyView").hidden).toBe(true);
     expect($("heroVideo").hasAttribute("src")).toBe(false);
-    expect($("result").textContent).toBe("Panel: standby — acked by the cooler");
+    expect($("result").textContent).toBe("Panel in standby — cooler confirmed");
     for (const id of ["modeMirror", "displaySwitch"]) {
       expect($(id).disabled).toBe(true);
       expect($(id).title).toBe(MIRROR_IN_STANDBY);
@@ -51,7 +51,7 @@ describe("panel switch", () => {
     expect($("panelOffView").hidden).toBe(true);
     expect($("hero").dataset.view).toBe("live");
     expect($("modeMirror").disabled).toBe(false);
-    expect($("result").textContent).toBe("Panel: on — acked by the cooler");
+    expect($("result").textContent).toBe("Panel on — cooler confirmed, video restarted");
   });
 
   it("follows a standby set by another client (the tray)", async () => {
@@ -75,7 +75,7 @@ describe("panel switch", () => {
     await tick(0);
     expect(checkedAttr("panelSwitch")).toBe("true");
     expect($("panelOffView").hidden).toBe(true);
-    expect($("result").textContent).toBe(`Panel: ${STANDBY_IN_MIRROR}`);
+    expect($("result").textContent).toBe(`Panel not put in standby: ${STANDBY_IN_MIRROR}`);
   });
 
   it("keeps ryuod-not-answering apart from standby", async () => {
@@ -102,7 +102,7 @@ describe("changes during standby", () => {
     setInput($("brightness"), "50");
     await tick(150);
     expect(d.posts("/api/brightness")).toEqual([{ percent: 50 }]);
-    expect($("result").textContent).toBe("Brightness: nothing sent — saved; applies when the panel turns on");
+    expect($("result").textContent).toBe("Brightness 50 % saved; applies when the panel turns on");
     expect($("result").style.color).toBe("var(--muted)");
   });
 
@@ -110,14 +110,14 @@ describe("changes during standby", () => {
     await openPage(makeDaemon(STANDBY));
     choose($("slot4"), "GPU Load");
     await tick(300);
-    expect($("result").textContent).toBe("Overlay: nothing sent — saved; applies when the panel turns on");
+    expect($("result").textContent).toBe("Slot 5: GPU Load saved; applies when the panel turns on");
   });
 
   it("a playlist change says the same and restarts nothing", async () => {
     await openPage(makeDaemon(STANDBY));
     box(CUSTOM[0]).click();
     await tick(400);
-    expect($("result").textContent).toBe("Play: nothing sent — saved; applies when the panel turns on");
+    expect($("result").textContent).toBe("Playlist of 2 files (Single, loop) saved; applies when the panel turns on");
   });
 
   it("a preview still shows, and says the panel is in standby", async () => {
@@ -159,7 +159,7 @@ describe("tray settings", () => {
     await tick(0);
     expect(d.posts("/api/tray")).toEqual([{ autostart: false }]);
     expect(checkedAttr("trayAutostart")).toBe("false");
-    expect($("result").textContent).toBe("Tray: saved; the tray picks it up within 3 s");
+    expect($("result").textContent).toBe("The tray no longer starts with the desktop session, from the next login");
   });
 
   it("posts the left-click action", async () => {
@@ -198,11 +198,11 @@ describe("tray settings", () => {
   });
 
   it.each([
-    ["50", "Tray: 50 % is already a step"],
-    ["0", "Tray: a step must be a whole number from 1 to 100"],
-    ["101", "Tray: a step must be a whole number from 1 to 100"],
-    ["12.5", "Tray: a step must be a whole number from 1 to 100"],
-    ["", "Tray: a step must be a whole number from 1 to 100"],
+    ["50", "Step not added: 50 % is already a step"],
+    ["0", "Step not added: a step must be a whole number from 1 to 100"],
+    ["101", "Step not added: a step must be a whole number from 1 to 100"],
+    ["12.5", "Step not added: a step must be a whole number from 1 to 100"],
+    ["", "Step not added: a step must be a whole number from 1 to 100"],
   ])("refuses %j before sending, as ryuod would", async (value, message) => {
     const d = await openPage();
     $("trayStepPlus").click();
@@ -226,7 +226,7 @@ describe("tray settings", () => {
     $("trayAutostart").click();
     await tick(0);
     expect(checkedAttr("trayAutostart")).toBe("true");
-    expect($("result").textContent).toBe("Tray: cannot remove /home/u/.config/autostart/ryuo-tray.desktop: Permission denied");
+    expect($("result").textContent).toBe("Start with the desktop session not changed: cannot remove /home/u/.config/autostart/ryuo-tray.desktop: Permission denied");
   });
 
   it("follows a change made elsewhere", async () => {
@@ -287,7 +287,7 @@ describe("Open Display Configuration", () => {
     $("mirrorSettings").click();
     await tick(0);
     expect(d.posts("/api/display/open-settings")).toEqual([{}, {}]);
-    expect($("result").textContent).toBe("Opened Display Configuration (kcmshell6 kcm_kscreen)");
+    expect($("result").textContent).toBe("Display Configuration opened; Virtual-RYUO is in the monitor list");
   });
 
   it("shows ryuod's reason when it cannot", async () => {
@@ -295,7 +295,7 @@ describe("Open Display Configuration", () => {
     d.replyOnce("POST /api/display/open-settings", { status: 503, body: { ok: false, error: "no Wayland session yet" } });
     $("displaySettingsOpen").click();
     await tick(0);
-    expect($("result").textContent).toBe("Display Configuration: no Wayland session yet");
+    expect($("result").textContent).toBe("Display Configuration not opened: no Wayland session yet");
   });
 
   it("is hidden when neither kcmshell6 nor systemsettings is installed", async () => {
@@ -332,5 +332,59 @@ describe("preset previews", () => {
     expect(tile(PRESET[0]).querySelector("button")).toBeNull();
     expect($("panelSwitch").hidden).toBe(true);
     expect($("trayCard").hidden).toBe(true);
+  });
+});
+
+describe("messages", () => {
+  it("say when the cooler took a command without confirming it", async () => {
+    const d = await openPage();
+    d.replyOnce("POST /api/brightness", {
+      status: 200, body: { ok: true, applied: true, acked: false, sent: ["POST brightness"], restartsVideo: false, value: 51, percent: 50 },
+    });
+    setInput($("brightness"), "50");
+    await tick(150);
+    expect($("result").textContent).toBe("Brightness 50 % sent; the cooler did not confirm it");
+    expect($("toast").title).toBe("Sent: POST brightness");
+  });
+
+  it("say a panel switch already there is already there", async () => {
+    const d = await openPage();
+    d.replyOnce("POST /api/panel", { status: 200, body: { ok: true, applied: false, acked: false, changed: false, sent: [], restartsVideo: false, panel: { on: false } } });
+    $("panelSwitch").click();
+    await tick(0);
+    expect($("result").textContent).toBe("The panel is already in standby");
+  });
+
+  it("say the panel switch waits for a cooler that is not connected", async () => {
+    await openPage(makeDaemon({ device: { connected: false } }));
+    $("panelSwitch").click();
+    await tick(0);
+    expect($("result").textContent).toBe("Panel in standby saved; applies when the cooler reconnects");
+  });
+
+  it("name the tray change and when the tray follows", async () => {
+    await openPage();
+    choose($("trayClick"), "menu");
+    await tick(0);
+    expect($("result").textContent).toBe("Tray left-click set to Show menu; the tray follows within 3 s");
+    $("traySteps").querySelector(".step button").click();
+    await tick(0);
+    expect($("result").textContent).toBe("Tray brightness steps set to 50, 75, 100 %; the tray menu follows within 3 s");
+  });
+
+  it("say what a hidden Memory Frequency means", async () => {
+    await openPage(makeDaemon({ config: { memoryMHz: 6000 } }));
+    $("memMHz").value = "0";
+    $("memMHz").dispatchEvent(new Event("change"));
+    await tick(0);
+    expect($("result").textContent).toBe("Memory MHz 0 saved; Memory Frequency is hidden from the slot lists");
+  });
+
+  it("name the overlay change", async () => {
+    await openPage();
+    $("statsOn").click();
+    await tick(300);
+    expect($("result").textContent).toBe("Stats overlay hidden, slot choices kept — cooler confirmed");
+    expect($("toast").title).toBe("Sent: POST preset");
   });
 });

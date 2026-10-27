@@ -92,7 +92,9 @@ describe("brightness in % (ryuod with config.brightnessPercent)", () => {
     expect(d.posts("/api/brightness")).toEqual([{ percent: 70 }]);
     expect(d.posts("/api/overlay")).toEqual([]);
     expect(d.config.brightness).toBe(71);
-    expect($("result").textContent).toBe("Brightness: POST brightness — acked by the cooler");
+    // 70 % is device value 71, which lights 177/255 = 69 %.
+    expect($("result").textContent).toBe("Brightness 69 % — cooler confirmed");
+    expect($("toast").title).toBe("Sent: POST brightness");
   });
 
   it("moves the slider to the % the device scale gives, once it has settled", async () => {
@@ -142,6 +144,6 @@ describe("brightness on the device scale (older ryuod)", () => {
     setInput($("brightness"), "70");
     await tick(150);
     expect(d.posts("/api/brightness")).toEqual([{ value: 70 }]);
-    expect($("result").textContent).toBe("Brightness: POST brightness — acked by the cooler");
+    expect($("result").textContent).toBe("Brightness 69 % — cooler confirmed");
   });
 });

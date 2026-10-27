@@ -12,11 +12,9 @@ Found by reading the code, not reproduced:
 - A state poll sent just before a brightness POST can come back after it; the slider then shows the old value for one poll (~1 s). Needs a request sequence check.
 - The finished-upload status line ("Playing …, converted") stays on the Background tab after every page load, even after another file has replaced it. The old page did the same.
 
-## Open questions
-- "Apply" sends playlist `[name]`: applying a file that is already in a multi-file playlist drops the others. Intended?
-
 ## Deviations from the mock (by choice)
 - Preview bar button is "Apply" (mock: "Show on panel"); user's choice.
+- Apply plays the previewed file alone. When the playlist has more than one file, the bar first asks "Replace the N-file playlist with this file?" [Replace] [Cancel] ("Replace N files?" at phone width); with a one-file playlist Apply sends at once.
 - Header is sticky (mock: static). Toast, "+ N more" on live chip, top-right status line added.
 - A preview the user asks for shows over the hero's standby view (mock: no preview while in standby); the preview bar then says "panel in standby".
 - The hero has two dark views: "Panel in standby" with Turn on (POST /api/panel), and "ryuod is not answering" when the state poll fails.

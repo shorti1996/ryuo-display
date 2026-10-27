@@ -14,7 +14,7 @@ describe("temperature unit", () => {
     unitRadio("Fahrenheit").click();
     await tick(0);
     expect(d.posts("/api/prefs")).toEqual([{ tempUnit: "Fahrenheit" }]);
-    expect($("result").textContent).toBe("Units: POST temperature — acked by the cooler");
+    expect($("result").textContent).toBe("Temperature unit °F — cooler confirmed");
     expect(d.gets("/api/catalog")).toHaveLength(2);
     expect(unitRadio("Fahrenheit").checked).toBe(true);
     expect(unitRadio("Celsius").checked).toBe(false);
@@ -35,7 +35,7 @@ describe("temperature unit", () => {
     d.replyOnce("POST /api/prefs", { status: 504, body: { ok: false, error: "device worker did not answer within 3 s" } });
     unitRadio("Fahrenheit").click();
     await tick(0);
-    expect($("result").textContent).toBe("Units: device worker did not answer within 3 s");
+    expect($("result").textContent).toBe("Temperature unit °F not saved: device worker did not answer within 3 s");
     // The radio keeps the user's click; the config still says Celsius.
     expect(unitRadio("Fahrenheit").checked).toBe(true);
   });
@@ -66,7 +66,7 @@ describe("memory MHz", () => {
     $("memMHz").value = "25000";
     $("memMHz").dispatchEvent(new Event("change"));
     await tick(0);
-    expect($("result").textContent).toBe("Units: memoryMHz must be an integer 0-20000");
+    expect($("result").textContent).toBe("Memory MHz 25000 not saved: memoryMHz must be an integer 0-20000");
     expect($("result").style.color).toBe("var(--bad)");
   });
 
@@ -75,8 +75,8 @@ describe("memory MHz", () => {
     $("memMHz").value = "6400";
     $("memMHz").dispatchEvent(new Event("change"));
     await tick(0);
-    expect($("result").textContent).toContain("nothing sent");
-    expect($("result").textContent).not.toContain("sent, no ack");
+    expect($("result").textContent).toBe("Memory MHz 6400 saved; the panel shows it from the next sample");
+    expect($("toast").title).toBe("");
   });
 });
 

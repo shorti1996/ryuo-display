@@ -59,7 +59,7 @@ describe("media list", () => {
     expect(d.gets("/api/media").map((c) => c.query)).toEqual(["", "refresh=1"]);
     expect(boxes().map((b) => b.value)).toEqual(["new.mp4", "RYUO_IV_HW_Info_04.mp4"]);
     expect(checked()).toEqual(["RYUO_IV_HW_Info_04.mp4"]);
-    expect($("result").textContent).toBe("Media list from adb");
+    expect($("result").textContent).toBe("Media list refreshed: 1 file on the cooler, 1 preset");
   });
 
   it("shows a failed refresh as an error", async () => {
@@ -67,7 +67,7 @@ describe("media list", () => {
     d.replyOnce("GET /api/media", { status: 504, body: { ok: false, error: "neither the conn reply nor adb gave a media list" } });
     $("refresh").click();
     await tick(0);
-    expect($("result").textContent).toBe("Media list: neither the conn reply nor adb gave a media list");
+    expect($("result").textContent).toBe("Media list not refreshed: neither the conn reply nor adb gave a media list");
     expect(boxes().map((b) => b.value)).toEqual([...CUSTOM, ...PRESET]);
   });
 
@@ -79,7 +79,7 @@ describe("media list", () => {
     expect($("result").style.color).toBe("var(--bad)");
     $("refresh").click();
     await tick(0);
-    expect($("result").textContent).toBe("Media list from conn");
+    expect($("result").textContent).toBe("Media list refreshed: 2 files on the cooler, 2 presets");
     expect($("result").style.color).toBe("var(--muted)");
   });
 
@@ -105,7 +105,7 @@ describe("playlist", () => {
       media: [CUSTOM[1], "RYUO_IV_HW_Info_01.mp4", "RYUO_IV_HW_Info_04.mp4"],
       playMode: "Single",
     }]);
-    expect($("result").textContent).toBe("Play: POST waterBlockScreenId — acked by the cooler (video restarted)");
+    expect($("result").textContent).toBe("Playlist of 3 files (Single, loop) — cooler confirmed, video restarted");
     expect(badge(CUSTOM[1])).toBe("On panel");
   });
 
@@ -140,7 +140,7 @@ describe("playlist", () => {
     expect(box("RYUO_IV_HW_Info_04.mp4").checked).toBe(false);
     await tick(400);
     expect(d.posts("/api/media/select")).toEqual([]);
-    expect($("result").textContent).toBe("Play: pick at least one file");
+    expect($("result").textContent).toBe("Keep at least one file in the playlist");
     expect($("result").style.color).toBe("var(--bad)");
     // The panel still plays the old playlist, and the box and badge say so.
     expect(checked()).toEqual(["RYUO_IV_HW_Info_04.mp4"]);
@@ -157,7 +157,7 @@ describe("playlist", () => {
     box(CUSTOM[0]).click();
     await tick(400);
     expect($("result").textContent).toBe(
-      `Play: not in the device media list: ${CUSTOM[0]} (GET /api/media?refresh=1)`,
+      `Playlist not changed: not in the device media list: ${CUSTOM[0]} (GET /api/media?refresh=1)`,
     );
   });
 
@@ -232,7 +232,7 @@ describe("Delete", () => {
     await tick(0);
     expect(d.posts("/api/media/delete")).toEqual([{ names: [CUSTOM[1]] }]);
     expect(boxes().map((b) => b.value)).toEqual([CUSTOM[0], ...PRESET]);
-    expect($("result").textContent).toBe(`Deleted ${CUSTOM[1]}`);
+    expect($("result").textContent).toBe(`Deleted ${CUSTOM[1]} from the cooler`);
     expect($("result").style.color).toBe("var(--muted)");
   });
 
@@ -271,7 +271,7 @@ describe("Delete", () => {
     await tick(0);
     expect(checked()).toEqual(["RYUO_IV_HW_Info_01.mp4"]);
     expect(badge("RYUO_IV_HW_Info_01.mp4")).toBe("On panel");
-    expect($("result").textContent).toBe(`Deleted ${CUSTOM[0]}; playlist now RYUO_IV_HW_Info_01.mp4`);
+    expect($("result").textContent).toBe(`Deleted ${CUSTOM[0]} from the cooler; the panel plays RYUO_IV_HW_Info_01.mp4 instead`);
   });
 
   it("says the new playlist waits for the cooler when it is not connected", async () => {
@@ -280,7 +280,7 @@ describe("Delete", () => {
     delButton(CUSTOM[0]).click();
     await tick(0);
     expect($("result").textContent).toBe(
-      `Deleted ${CUSTOM[0]}; playlist now RYUO_IV_HW_Info_01.mp4, sent when the cooler reconnects`,
+      `Deleted ${CUSTOM[0]} from the cooler; the panel plays RYUO_IV_HW_Info_01.mp4 instead, from when the cooler reconnects`,
     );
   });
 
@@ -292,7 +292,7 @@ describe("Delete", () => {
     expect(delButton(CUSTOM[0]).disabled).toBe(true);
     expect(delButton(CUSTOM[0]).textContent).toBe("Deleting…");
     await tick(0);
-    expect($("result").textContent).toBe("Delete: the cooler did not take mediaDelete over HID, and adb: no devices");
+    expect($("result").textContent).toBe(`${CUSTOM[0]} not deleted: the cooler did not take mediaDelete over HID, and adb: no devices`);
     expect($("result").style.color).toBe("var(--bad)");
     expect(delButton(CUSTOM[0]).disabled).toBe(false);
     expect(delButton(CUSTOM[0]).getAttribute("aria-label")).toBe(`Delete ${CUSTOM[0]}`);
@@ -310,7 +310,7 @@ describe("Delete", () => {
     delButton(CUSTOM[0]).click();
     delButton(CUSTOM[0]).click();
     await tick(0);
-    expect($("result").textContent).toBe(`Delete: ${CUSTOM[0]} is still on the cooler`);
+    expect($("result").textContent).toBe(`${CUSTOM[0]} is still on the cooler; the delete did not take`);
     expect($("result").style.color).toBe("var(--bad)");
     expect(tile(CUSTOM[0])).toBeDefined();
   });
@@ -359,7 +359,7 @@ describe("while the second display holds HomeUI on the black image", () => {
     d.held = true;
     box(CUSTOM[0]).click();
     await tick(400);
-    expect($("result").textContent).toBe("Play: nothing sent — saved; applies when the second display is off");
+    expect($("result").textContent).toBe("Playlist of 2 files (Single, loop) saved; applies when the second display is off");
     expect(checked()).toEqual([CUSTOM[0], "RYUO_IV_HW_Info_04.mp4"]);
   });
 
@@ -370,7 +370,7 @@ describe("while the second display holds HomeUI on the black image", () => {
     delButton(CUSTOM[0]).click();
     await tick(0);
     expect($("result").textContent).toBe(
-      `Deleted ${CUSTOM[0]}; playlist now RYUO_IV_HW_Info_01.mp4, applies when the second display is off`,
+      `Deleted ${CUSTOM[0]} from the cooler; the panel plays RYUO_IV_HW_Info_01.mp4 instead, from when the second display is off`,
     );
   });
 
@@ -461,7 +461,7 @@ describe("preview in the hero", () => {
     thumb(CUSTOM[0]).click();
     $("pvApply").click();
     await tick(0);
-    expect($("result").textContent).toBe("Play: device worker did not answer within 3 s");
+    expect($("result").textContent).toBe(`${CUSTOM[0]} not applied: device worker did not answer within 3 s`);
     expect($("previewBar").hidden).toBe(false);
     expect(checked()).toEqual(["RYUO_IV_HW_Info_04.mp4"]);
   });
@@ -563,7 +563,7 @@ describe("upload drop zone", () => {
       const first = FakeXhr.last;
       drop(new File(["b"], "b.mp4"));
       expect(FakeXhr.last).toBe(first);
-      expect($("result").textContent).toBe("Upload: another video is still being processed");
+      expect($("result").textContent).toBe("Wait for the current upload to finish first");
     });
   });
 
@@ -587,5 +587,78 @@ describe("upload drop zone", () => {
     d.upload = { ...up, state: "done", name: "2026-10-27_12-00-00-000_photo.png", applied: true, acked: true, heldByDisplay: false, heldByStandby: false };
     await tick(1000);
     expect($("upStatus").textContent).toBe("Playing 2026-10-27_12-00-00-000_photo.png, converted to a 2240×1080 PNG");
+  });
+});
+
+describe("Apply on a playlist of several files", () => {
+  const multi = () => makeDaemon({ config: { media: ["RYUO_IV_HW_Info_04.mp4", CUSTOM[1]], playMode: "Cycle" } });
+
+  it("asks in the bar before replacing the playlist, and sends nothing yet", async () => {
+    const d = await openPage(multi());
+    thumb(CUSTOM[0]).click();
+    $("pvApply").click();
+    await tick(0);
+    expect(d.posts("/api/media/select")).toEqual([]);
+    expect($("pvAsk").hidden).toBe(false);
+    expect($("pvAskLong").textContent).toBe("Replace the 2-file playlist with this file?");
+    expect($("pvAskShort").textContent).toBe("Replace 2 files?");
+    expect($("previewBar").classList.contains("asking")).toBe(true);
+    for (const id of ["pvApply", "pvNote", "pvClose"]) expect($(id).hidden).toBe(true);
+    for (const id of ["pvReplace", "pvCancel"]) expect($(id).hidden).toBe(false);
+  });
+
+  it("Replace sends the file alone", async () => {
+    const d = await openPage(multi());
+    thumb(CUSTOM[0]).click();
+    $("pvApply").click();
+    $("pvReplace").click();
+    await tick(0);
+    expect(d.posts("/api/media/select")).toEqual([{ media: [CUSTOM[0]], playMode: "Cycle" }]);
+    expect($("previewBar").hidden).toBe(true);
+    expect($("result").textContent).toBe(`Background ${CUSTOM[0]} — cooler confirmed, video restarted`);
+  });
+
+  it("Cancel goes back to Apply and keeps the playlist", async () => {
+    const d = await openPage(multi());
+    thumb(CUSTOM[0]).click();
+    $("pvApply").click();
+    $("pvCancel").click();
+    await tick(400);
+    expect(d.posts("/api/media/select")).toEqual([]);
+    expect($("pvApply").hidden).toBe(false);
+    expect($("pvAsk").hidden).toBe(true);
+    expect($("previewBar").classList.contains("asking")).toBe(false);
+  });
+
+  it("asks for a file already in the playlist too, since the others would go", async () => {
+    const d = await openPage(multi());
+    thumb(CUSTOM[1]).click();
+    $("pvApply").click();
+    await tick(0);
+    expect(d.posts("/api/media/select")).toEqual([]);
+    expect($("pvAsk").hidden).toBe(false);
+  });
+
+  it("stops asking when another file is previewed or the preview closes", async () => {
+    await openPage(multi());
+    thumb(CUSTOM[0]).click();
+    $("pvApply").click();
+    thumb(CUSTOM[1]).click();
+    expect($("pvAsk").hidden).toBe(true);
+    $("pvApply").click();
+    $("pvCancel").click();
+    $("pvApply").click();
+    $("pvClose").click();  // hidden while asking, but closing by any route resets it
+    thumb(CUSTOM[0]).click();
+    expect($("pvApply").hidden).toBe(false);
+  });
+
+  it("sends at once on a playlist of one file", async () => {
+    const d = await openPage();
+    thumb(CUSTOM[0]).click();
+    $("pvApply").click();
+    await tick(0);
+    expect(d.posts("/api/media/select")).toHaveLength(1);
+    expect($("pvAsk").hidden).toBe(true);
   });
 });

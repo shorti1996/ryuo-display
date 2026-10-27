@@ -96,7 +96,7 @@ describe("second display", () => {
     await tick(0);
     expect(d.posts("/api/display")).toEqual([{ on: true }]);
     expect($("displayText").textContent).toBe("Starting…");
-    expect($("result").textContent).toBe("Second display: starting");
+    expect($("result").textContent).toBe("Second display starting");
   });
 
   it("shows the latest status line while starting", async () => {
@@ -203,7 +203,7 @@ describe("second display", () => {
     await tick(0);
     expect(switchOn()).toBe(false);
     expect(pressed("modeStats")).toBe(true);
-    expect($("result").textContent).toBe("Second display: device worker did not answer within 3 s");
+    expect($("result").textContent).toBe("Second display not started: device worker did not answer within 3 s");
   });
 
   it("disables the switch when the daemon has no second display", async () => {

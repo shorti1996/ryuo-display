@@ -12,13 +12,13 @@ describe("API errors", () => {
     d.replyOnce("POST /api/overlay", { status: 400, body: { ok: false, error: "titleColor must be #RRGGBB or #AARRGGBB" } });
     setInput($("titleColor"), "#00ff00");
     await tick(300);
-    expect($("result").textContent).toBe("Overlay: titleColor must be #RRGGBB or #AARRGGBB");
+    expect($("result").textContent).toBe("Title colour #00FF00 not saved: titleColor must be #RRGGBB or #AARRGGBB");
     expect($("result").style.color).toBe("var(--bad)");
 
     setInput($("titleColor"), "#0000ff");
     await tick(300);
     expect(d.posts("/api/overlay")).toHaveLength(2);
-    expect($("result").textContent).toBe("Overlay: POST preset — acked by the cooler");
+    expect($("result").textContent).toBe("Title colour #0000FF — cooler confirmed");
     expect($("result").style.color).toBe("var(--muted)");
   });
 
@@ -27,7 +27,7 @@ describe("API errors", () => {
     d.replyOnce("POST /api/brightness", { status: 502, text: "<html>Bad Gateway</html>" });
     setInput($("brightness"), "50");
     await tick(150);
-    expect($("result").textContent).toBe("Brightness: HTTP 502");
+    expect($("result").textContent).toBe("Brightness not changed: HTTP 502");
   });
 
   it("treats a 200 with ok:false as an error", async () => {
@@ -35,7 +35,7 @@ describe("API errors", () => {
     d.replyOnce("POST /api/media/select", { status: 200, body: { ok: false, error: "playlist too long for one HID report" } });
     $("play").click();
     await tick(0);
-    expect($("result").textContent).toBe("Play: playlist too long for one HID report");
+    expect($("result").textContent).toBe("Playlist not changed: playlist too long for one HID report");
   });
 
   it("shows a 504 from the device worker", async () => {
@@ -43,7 +43,7 @@ describe("API errors", () => {
     d.replyOnce("POST /api/overlay", { status: 504, body: { ok: false, error: "device worker did not answer within 3 s" } });
     choose(slot(4), "GPU Load");
     await tick(300);
-    expect($("result").textContent).toBe("Overlay: device worker did not answer within 3 s");
+    expect($("result").textContent).toBe("Slot 5: GPU Load not saved: device worker did not answer within 3 s");
     // The edit stays in the UI, so the next change resends it.
     expect(slot(4).value).toBe("GPU Load");
     setInput($("opacity"), "50");
@@ -104,7 +104,7 @@ describe("daemon down", () => {
     d.down = true;
     choose(slot(4), "GPU Load");
     await tick(300);
-    expect($("result").textContent).toBe("Overlay: Failed to fetch");
+    expect($("result").textContent).toBe("Slot 5: GPU Load not saved: Failed to fetch");
     d.down = false;
     choose(slot(5), "GPU Speed");
     await tick(300);
@@ -116,7 +116,7 @@ describe("daemon down", () => {
     d.down = true;
     await openPage(d);
     expect($("conn").textContent).toBe("Daemon unreachable");
-    expect($("result").textContent).toBe("Media list: Failed to fetch");
+    expect($("result").textContent).toBe("Media list not loaded: Failed to fetch");
     expect($("brightOut").textContent).toBe("");
 
     d.down = false;
