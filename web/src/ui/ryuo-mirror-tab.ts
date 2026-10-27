@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, type PropertyDeclarations } from "lit";
 import {
   ASK_WHILE_STARTING,
   backgroundText,
@@ -22,6 +22,27 @@ const DOT_ICON = html`<svg aria-hidden="true" width="16" height="16" viewBox="0 
  * The host is the tab panel.
  */
 export class RyuoMirrorTab extends RyuoElement {
+  static override properties: PropertyDeclarations = { asking: { state: true } };
+  /** Ask again's POST is running: the button stays disabled until it answers. */
+  declare asking: boolean;
+
+  constructor() {
+    super();
+    this.asking = false;
+  }
+
+  async #askAgain(): Promise<void> {
+    if (!this.app) return;
+    this.asking = true;
+    this.flush();
+    try {
+      await this.app.actions.resetChoice();
+    } finally {
+      this.asking = false;
+      this.flush();
+    }
+  }
+
   #switch() {
     const state = this.app?.store.state;
     const actions = this.app?.actions;
@@ -63,11 +84,10 @@ export class RyuoMirrorTab extends RyuoElement {
     // ryuod refuses while the second display starts: the screen-share dialog may be open, and
     // its answer writes a new choice.
     const starting = state?.display?.state === "starting";
-    const sending = state?.editing.has("desktop.portalTokenSaved") ?? false;
     return html`<div class="pointer-row">
       <div class="kv"><b>Mouse pointer</b><button class="btn" id="askAgain" type="button" ?hidden=${!desktop}
-        ?disabled=${!desktop?.portalTokenSaved || starting || sending} title=${starting ? ASK_WHILE_STARTING : ""}
-        @click=${() => this.app?.actions.resetChoice()}>Ask again</button></div>
+        ?disabled=${!desktop?.portalTokenSaved || starting || this.asking} title=${starting ? ASK_WHILE_STARTING : ""}
+        @click=${() => this.#askAgain()}>Ask again</button></div>
       <p class="note" id="displayPointer" ?hidden=${!pointer}>${pointer}</p>
       <p class="note">To show the pointer, the desktop asks once which screen to share: choose Virtual-RYUO and allow restoring, so later starts skip the question.</p>
       <p class="note" id="choiceText" ?hidden=${!desktop}>${desktop ? choiceText(desktop) : ""}</p>

@@ -271,21 +271,31 @@ describe("the mirror switch's POSTs, compared with the old page", () => {
 });
 
 describe("Ask again while its POST runs", () => {
-  // The old page let a poll during the POST rewrite the choice; the Lit page holds
-  // desktop.portalTokenSaved until the reply, which carries ryuod's value anyway.
-  it("a poll meanwhile leaves the choice as shown; the reply's value shows when it answers", async () => {
+  // As on the old page, a poll during the POST shows ryuod's choice: Ask again changes nothing
+  // before its reply, so it holds no key, and only its button is disabled meanwhile.
+  it("a refused Ask again shows the choice a poll reported during its POST", async () => {
+    const daemon = await openPage(); const serve = daemon.fetch.getMockImplementation();
+    let release; const held = new Promise((resolve) => { release = resolve; });
+    daemon.fetch.mockImplementation(async (url, options) => {
+      if (url !== "/api/display/reset-choice") return serve(url, options);
+      await held; return { ok: false, status: 409, json: async () => ({ ok: false, error: "the second display is starting" }) };
+    });
+    $("askAgain").click(); daemon.desktop.portalTokenSaved = false; await tick(1000); release(); await tick(0);
+    expect($("choiceText").textContent).toBe("No screen-share choice is saved; the next start asks which screen to share.");
+    expect($("askAgain").disabled).toBe(true);
+  });
+
+  it("keeps the button disabled until the POST answers, and enabled again after a refusal", async () => {
     const daemon = await openPage();
+    daemon.replyOnce("POST /api/display/reset-choice", { status: 500, body: { ok: false, error: "disk full" } });
     const answerNext = holdEach(daemon, "/api/display/reset-choice");
     $("askAgain").click();
     expect($("askAgain").disabled).toBe(true);
-    daemon.desktop.portalTokenSaved = false; // another client deleted it first
     await tick(1000);
-    expect($("choiceText").textContent).toBe("A screen-share choice is saved, so starts skip the question. Ask again deletes it.");
     expect($("askAgain").disabled).toBe(true);
     answerNext();
     await tick(0);
-    expect($("choiceText").textContent).toBe("No screen-share choice is saved; the next start asks which screen to share.");
-    expect($("result").textContent).toBe("No screen-share choice was saved; the next start asks anyway");
+    expect($("askAgain").disabled).toBe(false);
   });
 
   it("after a refusal, the next poll shows ryuod's choice", async () => {

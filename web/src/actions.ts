@@ -336,22 +336,25 @@ export function createActions(store: Store, poll: Poll) {
     });
   }
 
-  /** Delete the saved screen-share choice, so the next start of the second display asks again. */
-  function resetChoice(): Promise<void> {
-    return holding(["desktop.portalTokenSaved"], async () => {
-      try {
-        const reply = await postResetChoice();
-        store.saw("desktop", reply.desktop);
-        store.patch({ desktop: reply.desktop });
-        store.say(
-          reply.removed
-            ? "Screen-share choice deleted; the next start of the second display asks again"
-            : "No screen-share choice was saved; the next start asks anyway",
-        );
-      } catch (error) {
-        fail(store, error, "Screen-share choice not deleted");
-      }
-    });
+  /**
+   * Delete the saved screen-share choice, so the next start of the second display asks again.
+   * It holds no key: nothing changes before the reply, so a poll during the POST may show
+   * ryuod's choice, and a refusal then leaves that choice showing, as the old page did. The
+   * Desktop mirror tab disables Ask again until this resolves.
+   */
+  async function resetChoice(): Promise<void> {
+    try {
+      const reply = await postResetChoice();
+      store.saw("desktop", reply.desktop);
+      store.patch({ desktop: reply.desktop });
+      store.say(
+        reply.removed
+          ? "Screen-share choice deleted; the next start of the second display asks again"
+          : "No screen-share choice was saved; the next start asks anyway",
+      );
+    } catch (error) {
+      fail(store, error, "Screen-share choice not deleted");
+    }
   }
 
   async function openDisplaySettings(): Promise<void> {
