@@ -20,6 +20,9 @@ DEVDIR ?= /dev
 UNIT_DIR := $(HOME)/.config/systemd/user
 APPS_DIR := $(HOME)/.local/share/applications
 AUTOSTART_DIR := $(HOME)/.config/autostart
+ICONS_DIR := $(HOME)/.local/share/icons
+# The tray's icon theme files, relative to packaging/icons (hicolor/<size>/<context>/<name>.svg).
+ICON_FILES := $(patsubst $(APPDIR)/packaging/icons/%,%,$(wildcard $(APPDIR)/packaging/icons/hicolor/*/*/*.svg))
 STATE_DIR := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/ryuo
 UDEV_RULE := 70-rog-ryuo-iv.rules
 
@@ -47,8 +50,16 @@ help:
 		if (sub(/^\t@?# /, "")) printf "  %-14s %s\n", t, $$0 }' $(MAKEFILE)
 
 install:
-	# Install the ryuod user unit (enabled and started), the tray launcher and its autostart entry
+	# Install the ryuod user unit (enabled and started), the tray launcher, its autostart entry and icons
 	install -d $(UNIT_DIR) $(APPS_DIR) $(AUTOSTART_DIR)
+	# plasmashell does not pick up icon names that were missing when it looked them up, so a first
+	# install can leave the tray icon blank until it restarts
+	new=; for f in $(ICON_FILES); do [ -f $(ICONS_DIR)/$$f ] || new=1; \
+		install -D -m 644 $(APPDIR)/packaging/icons/$$f $(ICONS_DIR)/$$f; done; \
+	if [ -n "$$new" ]; then echo "New icons installed. If the tray icon is blank:" \
+		"systemctl --user restart plasma-plasmashell.service"; fi
+	# A newer mtime on the theme directory makes icon caches rescan it
+	touch $(ICONS_DIR)/hicolor
 	sed 's|@APPDIR@|$(APPDIR)|g' $(APPDIR)/packaging/ryuod.service > $(UNIT_DIR)/ryuod.service
 	sed 's|@APPDIR@|$(APPDIR)|g' $(APPDIR)/packaging/ryuo-tray.desktop > $(APPS_DIR)/ryuo-tray.desktop
 	install -m 644 $(APPS_DIR)/ryuo-tray.desktop $(AUTOSTART_DIR)/ryuo-tray.desktop
@@ -58,6 +69,8 @@ install:
 	# restart, not start: a running daemon would otherwise keep the old unit and code
 	$(SYSTEMCTL) --user restart ryuod.service
 	$(rebuild-menu)
+	@if pgrep -f '[r]yuo_tray.py' >/dev/null 2>&1; then echo "The running tray keeps its old code:" \
+		"quit it from its menu and start RYUO LCD again."; fi
 	@uevent=$$(grep -liE '^HID_ID=[0-9a-f]+:0000(0b05|1c75):00001c76$$' $(HIDRAW_SYSFS)/hidraw*/device/uevent 2>/dev/null | head -n 1); \
 	if [ -z "$$uevent" ]; then \
 		echo "No RYUO IV hidraw node found (cooler off or not enumerated)."; \
@@ -75,9 +88,10 @@ install-udev:
 	$(SUDO) $(UDEVADM) trigger --subsystem-match=hidraw
 
 uninstall:
-	# Stop and disable ryuod, remove the unit, launcher and autostart entry
+	# Stop and disable ryuod, remove the unit, launcher, autostart entry and icons
 	-$(SYSTEMCTL) --user disable --now ryuod.service
 	rm -f $(UNIT_DIR)/ryuod.service $(APPS_DIR)/ryuo-tray.desktop $(AUTOSTART_DIR)/ryuo-tray.desktop
+	rm -f $(addprefix $(ICONS_DIR)/,$(ICON_FILES))
 	$(SYSTEMCTL) --user daemon-reload
 	$(rebuild-menu)
 	@if [ -f $(UDEV_RULES_DIR)/$(UDEV_RULE) ]; then echo "Kept: $(UDEV_RULES_DIR)/$(UDEV_RULE)" \

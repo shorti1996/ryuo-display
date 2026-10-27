@@ -12,13 +12,13 @@ describe("API errors", () => {
     d.replyOnce("POST /api/overlay", { status: 400, body: { ok: false, error: "titleColor must be #RRGGBB or #AARRGGBB" } });
     setInput($("titleColor"), "#00ff00");
     await tick(300);
-    expect($("result").textContent).toBe("Overlay: titleColor must be #RRGGBB or #AARRGGBB");
+    expect($("result").textContent).toBe("Title colour #00FF00 not saved: titleColor must be #RRGGBB or #AARRGGBB");
     expect($("result").style.color).toBe("var(--bad)");
 
     setInput($("titleColor"), "#0000ff");
     await tick(300);
     expect(d.posts("/api/overlay")).toHaveLength(2);
-    expect($("result").textContent).toBe("Overlay: POST preset — acked by the cooler");
+    expect($("result").textContent).toBe("Title colour #0000FF — cooler confirmed");
     expect($("result").style.color).toBe("var(--muted)");
   });
 
@@ -27,7 +27,7 @@ describe("API errors", () => {
     d.replyOnce("POST /api/brightness", { status: 502, text: "<html>Bad Gateway</html>" });
     setInput($("brightness"), "50");
     await tick(150);
-    expect($("result").textContent).toBe("Brightness: HTTP 502");
+    expect($("result").textContent).toBe("Brightness not changed: HTTP 502");
   });
 
   it("treats a 200 with ok:false as an error", async () => {
@@ -35,7 +35,7 @@ describe("API errors", () => {
     d.replyOnce("POST /api/media/select", { status: 200, body: { ok: false, error: "playlist too long for one HID report" } });
     $("play").click();
     await tick(0);
-    expect($("result").textContent).toBe("Play: playlist too long for one HID report");
+    expect($("result").textContent).toBe("Playlist not changed: playlist too long for one HID report");
   });
 
   it("shows a 504 from the device worker", async () => {
@@ -43,7 +43,7 @@ describe("API errors", () => {
     d.replyOnce("POST /api/overlay", { status: 504, body: { ok: false, error: "device worker did not answer within 3 s" } });
     choose(slot(4), "GPU Load");
     await tick(300);
-    expect($("result").textContent).toBe("Overlay: device worker did not answer within 3 s");
+    expect($("result").textContent).toBe("Slot 5: GPU Load not saved: device worker did not answer within 3 s");
     // The edit stays in the UI, so the next change resends it.
     expect(slot(4).value).toBe("GPU Load");
     setInput($("opacity"), "50");
@@ -56,10 +56,13 @@ describe("API errors", () => {
     d.replyOnce("GET /api/state", { status: 200, body: { ok: false, error: "state unreadable" } });
     await tick(1000);
     expect($("dot").className).toBe("dot bad");
-    expect($("conn").textContent).toBe("daemon unreachable");
+    expect($("conn").textContent).toBe("Daemon unreachable");
     expect($("err").textContent).toBe("state unreadable");
+    expect($("standbyView").hidden).toBe(false);
+    expect($("standbyText").textContent).toBe("state unreadable");
     await tick(1000);
-    expect($("conn").textContent).toBe("connected");
+    expect($("conn").textContent).toBe("Connected");
+    expect($("standbyView").hidden).toBe(true);
     expect($("err").textContent).toBe("");
   });
 
@@ -77,7 +80,7 @@ describe("daemon down", () => {
     d.down = true;
     await tick(1000);
     expect($("dot").className).toBe("dot bad");
-    expect($("conn").textContent).toBe("daemon unreachable");
+    expect($("conn").textContent).toBe("Daemon unreachable");
     expect($("err").textContent).toBe("Failed to fetch");
     const before = d.gets("/api/state").length;
     await tick(3000);
@@ -92,7 +95,7 @@ describe("daemon down", () => {
     d.down = false;
     await tick(1000);
     expect($("dot").className).toBe("dot ok");
-    expect($("conn").textContent).toBe("connected");
+    expect($("conn").textContent).toBe("Connected");
     expect($("err").textContent).toBe("");
   });
 
@@ -101,7 +104,7 @@ describe("daemon down", () => {
     d.down = true;
     choose(slot(4), "GPU Load");
     await tick(300);
-    expect($("result").textContent).toBe("Overlay: Failed to fetch");
+    expect($("result").textContent).toBe("Slot 5: GPU Load not saved: Failed to fetch");
     d.down = false;
     choose(slot(5), "GPU Speed");
     await tick(300);
@@ -112,14 +115,14 @@ describe("daemon down", () => {
     const d = makeDaemon({ config: { brightness: 77 } });
     d.down = true;
     await openPage(d);
-    expect($("conn").textContent).toBe("daemon unreachable");
-    expect($("result").textContent).toBe("Media list: Failed to fetch");
+    expect($("conn").textContent).toBe("Daemon unreachable");
+    expect($("result").textContent).toBe("Media list not loaded: Failed to fetch");
     expect($("brightOut").textContent).toBe("");
 
     d.down = false;
     await tick(1000);
-    expect($("conn").textContent).toBe("connected");
-    expect($("brightness").value).toBe("77");
+    expect($("conn").textContent).toBe("Connected");
+    expect($("brightness").value).toBe("75");  // 77 on the device scale, in %
     expect(slot(0).value).toBe("CPU Temperature");
     expect($("ps1").classList.contains("hidden")).toBe(false);
     // The catalog is retried every 15 s; by then the options are grouped normally.
@@ -143,7 +146,7 @@ describe("daemon down", () => {
     await openPage(d);
     d.down = false;
     await tick(5000);
-    const names = [...$("media").querySelectorAll("input[type=checkbox]")].map((b) => b.value);
-    expect(names).toEqual([...PRESET, ...CUSTOM]);
+    const names = [...document.querySelectorAll(".tile")].map((t) => t.dataset.name);
+    expect(names).toEqual([...CUSTOM, ...PRESET]);
   });
 });

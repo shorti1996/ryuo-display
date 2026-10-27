@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <!-- Same drawing as ryuo_tray.make_icon: the wide pump panel with three stat bars. -->
-  <rect x="4" y="12" width="56" height="40" rx="8" fill="#E5252B"/>
-  <rect x="14" y="34" width="8" height="10" fill="#fff"/>
-  <rect x="28" y="26" width="8" height="18" fill="#fff"/>
-  <rect x="42" y="18" width="8" height="26" fill="#fff"/>
-</svg>

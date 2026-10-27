@@ -93,14 +93,45 @@ export function defaultDevice() {
   };
 }
 
+/** ryuod's tray settings in GET /api/state, before brightnessStepValues and leftClickOptions are added. */
+export function defaultTray() {
+  return { autostart: true, leftClick: "page", brightnessSteps: [25, 50, 75, 100] };
+}
+
+/** ryuod.desktop_status(). */
+export function defaultDesktop() {
+  return { portalTokenSaved: true, displaySettings: "kcmshell6" };
+}
+
+// Python's round(): halves go to the even neighbour, as in ryuod's brightness mappings.
+function pyRound(x) {
+  const f = Math.floor(x), d = x - f;
+  if (Math.abs(d - 0.5) < 1e-9) return f % 2 === 0 ? f : f + 1;
+  return Math.round(x);
+}
+/** ryuod.brightness_percent and ryuod.brightness_value. */
+export const brightnessPercent = (v) => pyRound(Math.min(255, Math.floor(v * 2.5)) * 100 / 255);
+export const brightnessValue = (p) => Math.min(102, pyRound(p * 255 / 250));
+const TRAY_CLICKS = ["page", "menu", "panel", "stats"];
+
 class Invalid extends Error {}
+// A refusal with a status other than 400.
+class Refused extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 
 /**
  * A fake ryuod. Tests change `config`, `device`, `stats`, `mediaLists` directly, queue one-off
  * replies with `replyOnce`, and read what the page sent from `calls`.
  */
-export function makeDaemon({ config = {}, device = {}, stats = {}, media, display = {}, upload = null } = {}) {
+export function makeDaemon({
+  config = {}, device = {}, stats = {}, media, display = {}, upload = null, legacy = false, panel = {}, tray = {}, desktop = {},
+} = {}) {
   const d = {
+    // A ryuod from before the panel switch: no panel, tray or desktop in GET /api/state, no
+    // config.brightnessPercent, no {percent} brightness, and none of the routes added with them.
+    legacy,
+    panel: { on: true, ...clone(panel) },
+    tray: { ...defaultTray(), ...clone(tray) },
+    desktop: { ...defaultDesktop(), ...clone(desktop) },
     config: { ...defaultConfig(), ...clone(config) },
     device: { ...defaultDevice(), ...clone(device) },
     // The second-display status in GET /api/state; null stands for a ryuod without the feature.
@@ -141,15 +172,24 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
   };
 
   const reply = (status, body) => ({ status, body });
+  // public_config(): what every reply that carries the config sends.
+  const pub = () => (d.legacy ? clone(d.config) : { ...clone(d.config), brightnessPercent: brightnessPercent(d.config.brightness) });
+  const trayStatus = () => ({
+    ...clone(d.tray), brightnessStepValues: d.tray.brightnessSteps.map(brightnessValue), leftClickOptions: [...TRAY_CLICKS],
+  });
+  // Device.held(): while the panel is in standby, brightness, preset and config are saved, not sent.
+  const standby = () => !d.legacy && !d.panel.on;
+  const heldReply = { applied: false, acked: false, heldByStandby: true };
   const err = (status, msg) => reply(status, { ok: false, error: msg });
   const applied = () => ({ applied: d.device.connected, acked: d.device.connected });
 
   const routes = {
     "GET /api/state": () => reply(200, {
-      ok: true, device: clone(d.device), config: clone(d.config),
+      ok: true, device: clone(d.device), config: pub(),
       limits: { slots: 6, brightnessMax: 102, frameMax: 1024, lastHeartbeatBytes: 548 },
       media: { preset: [...d.mediaLists.preset], custom: [...d.mediaLists.custom] },
       display: clone(d.display), upload: clone(d.upload),
+      ...(d.legacy ? {} : { panel: clone(d.panel), tray: trayStatus(), desktop: clone(d.desktop) }),
     }),
     "GET /api/stats": () => {
       const values = {};
@@ -185,13 +225,21 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
         ch.statsVisible = body.statsVisible;
       }
       Object.assign(d.config, ch);
-      return reply(200, { ok: true, ...applied(), sent: ["POST preset"], restartsVideo: false, config: clone(d.config) });
+      if (standby()) return reply(200, { ok: true, ...heldReply, sent: [], restartsVideo: false, config: pub() });
+      return reply(200, { ok: true, ...applied(), sent: ["POST preset"], restartsVideo: false, config: pub() });
     },
     "POST /api/brightness": (body) => {
-      const v = body.value;
-      if (!Number.isInteger(v) || v < 0 || v > 102) throw new Invalid("value must be an integer 0-102");
+      let v = body.value;
+      if ("percent" in body && !d.legacy) {
+        const p = body.percent;
+        if (!Number.isInteger(p) || p < 0 || p > 100) throw new Invalid("percent must be an integer 0-100");
+        v = brightnessValue(p);
+      } else if (!Number.isInteger(v) || v < 0 || v > 102) throw new Invalid("value must be an integer 0-102");
       d.config.brightness = v;
-      return reply(200, { ok: true, ...applied(), sent: ["POST brightness"], restartsVideo: false, deviceLevel: Math.min(255, Math.floor(v * 2.5)) });
+      const level = Math.min(255, Math.floor(v * 2.5));
+      if (d.legacy) return reply(200, { ok: true, ...applied(), sent: ["POST brightness"], restartsVideo: false, deviceLevel: level });
+      const res = standby() ? { ...heldReply, sent: [] } : { ...applied(), sent: ["POST brightness"] };
+      return reply(200, { ok: true, ...res, restartsVideo: false, deviceLevel: level, value: v, percent: brightnessPercent(v) });
     },
     "POST /api/media/select": (body) => {
       const { media } = body, mode = body.playMode ?? d.config.playMode;
@@ -201,11 +249,14 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
       if (missing.length) throw new Invalid(`not in the device media list: ${missing.join(", ")} (GET /api/media?refresh=1)`);
       if (!["Single", "Cycle", "Random"].includes(mode)) throw new Invalid("playMode must be Single, Cycle or Random");
       Object.assign(d.config, { media: [...media], playMode: mode });
+      if (!d.held && standby()) {
+        return reply(200, { ok: true, ...heldReply, heldByDisplay: false, sent: [], restartsVideo: false, config: pub() });
+      }
       if (d.held) {
-        return reply(200, { ok: true, applied: false, acked: false, heldByDisplay: true, sent: [], restartsVideo: false, config: clone(d.config) });
+        return reply(200, { ok: true, applied: false, acked: false, heldByDisplay: true, sent: [], restartsVideo: false, config: pub() });
       }
       return reply(200, {
-        ok: true, ...applied(), heldByDisplay: false, sent: ["POST waterBlockScreenId"], restartsVideo: true, config: clone(d.config),
+        ok: true, ...applied(), heldByDisplay: false, sent: ["POST waterBlockScreenId"], restartsVideo: true, config: pub(),
       });
     },
     "POST /api/media/delete": (body) => {
@@ -231,7 +282,7 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
       }
       return reply(200, {
         ok: true, deleted: [...names], remaining: [], listedBy: "conn", sent, ...applied(), restartsVideo: changed && !d.held,
-        heldByDisplay: changed && d.held, config: clone(d.config), media: clone(d.mediaLists),
+        heldByDisplay: changed && d.held, config: pub(), media: clone(d.mediaLists),
       });
     },
     // The page only fetches this after its <video> or <img> reports an error.
@@ -240,9 +291,52 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
     "POST /api/display": (body) => {
       if (typeof body.on !== "boolean") throw new Invalid("on must be true or false");
       if (d.display === null) return err(503, "second display is not available in this ryuod");
+      if (body.on && standby()) return err(409, "the panel is in standby; turn it on before the second display");
       d.config.secondDisplay = body.on;
       d.display = { ...defaultDisplay(), on: body.on, state: body.on ? "starting" : "stopping" };
-      return reply(200, { ok: true, display: clone(d.display), config: clone(d.config) });
+      return reply(200, { ok: true, display: clone(d.display), config: pub() });
+    },
+    "POST /api/panel": (body) => {
+      if (typeof body.on !== "boolean") throw new Invalid("on must be true or false");
+      if (!body.on && d.display && d.display.on) {
+        throw new Refused(409, "the panel shows the second display; turn that off before standby");
+      }
+      const changed = body.on !== d.panel.on;
+      d.panel.on = body.on;
+      const sent = !changed ? [] : body.on ? ["POST waterBlockScreen", "POST waterBlockScreenId", "POST power", "POST brightness"] : ["POST disconn"];
+      const res = changed ? applied() : { applied: false, acked: false };
+      return reply(200, { ok: true, ...res, changed, sent, restartsVideo: changed && body.on, panel: clone(d.panel) });
+    },
+    // ryuod.post_tray, check_tray and check_steps.
+    "POST /api/tray": (body) => {
+      const t = clone(d.tray);
+      if ("leftClick" in body) {
+        if (!TRAY_CLICKS.includes(body.leftClick)) throw new Invalid(`leftClick must be one of ${TRAY_CLICKS.join(", ")}`);
+        t.leftClick = body.leftClick;
+      }
+      if ("brightnessSteps" in body) {
+        const v = body.brightnessSteps;
+        if (!Array.isArray(v) || v.length < 1 || v.length > 8) throw new Invalid("brightnessSteps must be a list of 1-8 integers 1-100");
+        for (const x of v) if (!Number.isInteger(x) || x < 1 || x > 100) throw new Invalid("each brightness step must be an integer 1-100");
+        if (new Set(v).size !== v.length) throw new Invalid("brightnessSteps has the same value twice");
+        t.brightnessSteps = [...v].sort((a, b) => a - b);
+      }
+      if ("autostart" in body) {
+        if (typeof body.autostart !== "boolean") throw new Invalid("autostart must be true or false");
+        t.autostart = body.autostart;
+      }
+      d.tray = t;
+      return reply(200, { ok: true, tray: trayStatus() });
+    },
+    "POST /api/display/reset-choice": () => {
+      if (d.display && d.display.state === "starting") throw new Refused(409, "the second display is starting; try again once it is on or off");
+      const removed = d.desktop.portalTokenSaved;
+      d.desktop.portalTokenSaved = false;
+      return reply(200, { ok: true, removed, desktop: clone(d.desktop) });
+    },
+    "POST /api/display/open-settings": () => {
+      if (!d.desktop.displaySettings) throw new Refused(501, "neither kcmshell6 nor systemsettings is installed (KDE Plasma's display settings)");
+      return reply(200, { ok: true, command: [d.desktop.displaySettings, "kcm_kscreen"] });
     },
     "POST /api/prefs": (body) => {
       const ch = {};
@@ -258,7 +352,7 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
       const unitChanged = "tempUnit" in ch && ch.tempUnit !== d.config.tempUnit;
       Object.assign(d.config, ch);
       const res = unitChanged ? applied() : { applied: true, acked: false };
-      return reply(200, { ok: true, ...res, sent: unitChanged ? ["POST temperature"] : [], restartsVideo: false, config: clone(d.config) });
+      return reply(200, { ok: true, ...res, sent: unitChanged ? ["POST temperature"] : [], restartsVideo: false, config: pub() });
     },
   };
 
@@ -267,7 +361,8 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
     const method = opt.method || "GET";
     const [path, query = ""] = String(url).split("?");
     const route = `${method} ${path}`;
-    if (!String(url).startsWith("/api/") || !(route in routes)) {
+    const added = ["POST /api/panel", "POST /api/tray", "POST /api/display/reset-choice", "POST /api/display/open-settings"];
+    if (!String(url).startsWith("/api/") || !(route in routes) || (d.legacy && added.includes(route))) {
       globalThis.__strayRequests.push(`fetch ${method} ${url}`);
       throw new Error(`fake daemon has no route for ${method} ${url}`);
     }
@@ -287,6 +382,7 @@ export function makeDaemon({ config = {}, device = {}, stats = {}, media, displa
       return respond(routes[route](body, query));
     } catch (e) {
       if (e instanceof Invalid) return respond(err(400, e.message));
+      if (e instanceof Refused) return respond(err(e.status, e.message));
       throw e;
     }
   });

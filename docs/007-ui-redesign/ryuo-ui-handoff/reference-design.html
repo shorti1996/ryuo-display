@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ryuo IV LCD — B2, interactive</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;family=Roboto+Condensed:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;background:#0E0F11}
+a{color:#FF6B70}a:hover{color:#FF9599}
+</style>
+</helmet>
+<div style="font-family: Inter, system-ui, sans-serif; color: #E8E9EB; background: #0E0F11; min-height: 100vh; font-size: 14px; line-height: 1.45">
+
+<header style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 10px 24px; border-bottom: 1px solid #222429; background: #121316">
+  <div style="font-weight: 700; letter-spacing: 0.06em; font-size: 15px">RYUO IV LCD</div>
+  <div style="flex-grow: 1"></div>
+  <button onClick="{{goAbout}}" aria-label="Connection details" style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid #234A33; background: #13261B; color: #7BE8AA; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer">
+    <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #34D27B"></span>Connected · V1.0.10
+  </button>
+  <button role="switch" aria-checked="{{screenAria}}" onClick="{{toggleScreen}}" style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 6px 0 14px; border: 1px solid #2A2C31; border-radius: 999px; background: #16171A; color: #C9CBD0; font: inherit; font-size: 13px; cursor: pointer">
+    Panel <span style="font-weight: 600; color: {{screenLabelColor}}; min-width: 56px; text-align: left">{{screenLabel}}</span>
+    <span aria-hidden="true" style="position: relative; width: 40px; height: 24px; border-radius: 999px; background: {{screenTrack}}"><span style="position: absolute; top: 3px; left: {{screenKnob}}; width: 18px; height: 18px; border-radius: 50%; background: #FFFFFF"></span></span>
+  </button>
+</header>
+
+<main style="max-width: 1180px; margin: 0 auto; padding: 24px 24px 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 18px">
+
+  <div style="position: relative; container-type: inline-size; aspect-ratio: 2240 / 1080; border-radius: 16px; overflow: hidden; border: 1px solid #23252A; background: #050506; font-family: 'Roboto Condensed', Bahnschrift, 'Arial Narrow', sans-serif">
+    <div aria-hidden="true" style="position: absolute; inset: 0; background: {{heroBg}}"></div>
+    <div aria-hidden="true" style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: Inter, sans-serif; font-size: 13px; color: rgba(255,255,255,0.16)">{{heroHint}}</div>
+
+    <sc-if value="{{showOverlay}}" hint-placeholder-val="{{true}}">
+      <sc-for list="{{slots}}" as="s" hint-placeholder-count="6">
+        <div style="position: absolute; left: {{s.left}}; right: {{s.right}}; top: {{s.top}}; display: flex; flex-direction: column; align-items: {{s.align}}; line-height: 1; gap: 0.4cqw; padding: 0.5cqw 0.8cqw; border-radius: 6px; outline: {{s.outline}}; outline-offset: 2px">
+          <span style="font-size: {{s.t}}; color: {{titleColor}}">{{s.title}}</span>
+          <span style="font-size: {{s.v}}; font-weight: 600; color: #FFFFFF">{{s.value}}<span style="font-size: {{s.u}}; font-weight: 400; margin-left: 0.3cqw">{{s.unit}}</span></span>
+        </div>
+      </sc-for>
+    </sc-if>
+
+    <sc-if value="{{liveChip}}" hint-placeholder-val="{{true}}">
+      <div style="position: absolute; top: 14px; left: 14px; display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 999px; background: rgba(10,10,12,0.6); font-family: Inter, sans-serif; font-size: 12px; color: #C9CBD0">
+        <span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: #34D27B"></span>Live · {{playingName}}
+      </div>
+    </sc-if>
+
+    <sc-if value="{{previewing}}" hint-placeholder-val="{{false}}">
+      <div style="position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; flex-wrap: nowrap; white-space: nowrap; width: max-content; align-items: center; gap: 12px; padding: 8px 8px 8px 14px; max-width: calc(100% - 32px); box-sizing: border-box; border-radius: 14px; background: rgba(12,12,14,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.09); font-family: Inter, sans-serif; font-size: 13px">
+        <span style="flex-shrink: 0; padding: 2px 8px; border-radius: 6px; border: 1px solid #FF6B70; color: #FF8A8E; font-size: 11px; font-weight: 600; letter-spacing: 0.08em">PREVIEW</span>
+        <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #E8E9EB">{{previewName}}</span>
+        <span style="flex-shrink: 0; font-size: 12px; color: #A6A9B0">not on the panel yet</span>
+        <button onClick="{{applyPreview}}" style="flex-shrink: 0; height: 36px; padding: 0 14px; border: 0; border-radius: 9px; background: {{accent}}; color: #FFFFFF; font: inherit; font-weight: 600; cursor: pointer">Show on panel</button>
+        <button onClick="{{backToLive}}" aria-label="Back to live view" style="flex-shrink: 0; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,0.14); border-radius: 9px; background: transparent; color: #E8E9EB; cursor: pointer">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{mirrorOn}}" hint-placeholder-val="{{false}}">
+      <div style="position: absolute; inset: 0; font-family: Inter, sans-serif">
+        <div style="position: absolute; left: 8%; top: 14%; width: 46%; height: 60%; border-radius: 8px; background: #181B22; border: 1px solid #2A2E38"><div style="height: 9%; background: #22262F; border-radius: 8px 8px 0 0"></div></div>
+        <div style="position: absolute; left: 44%; top: 30%; width: 44%; height: 56%; border-radius: 8px; background: #1B1F27; border: 1px solid #2E3340"><div style="height: 9%; background: #262B35; border-radius: 8px 8px 0 0"></div></div>
+        <div style="position: absolute; top: 14px; left: 14px; padding: 4px 10px; border-radius: 999px; background: rgba(10,10,12,0.7); font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #C9CBD0">Desktop mirror · Virtual-RYUO 2240×1080</div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{screenOff}}" hint-placeholder-val="{{false}}">
+      <div style="position: absolute; inset: 0; background: #030303; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; font-family: Inter, sans-serif">
+        <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7C8088" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"></path><path d="M6.3 6.3a8 8 0 1 0 11.4 0"></path></svg>
+        <span style="font-size: 15px; color: #C9CBD0">Panel in standby</span>
+        <button onClick="{{toggleScreen}}" style="height: 40px; padding: 0 18px; border: 1px solid #3A3D44; border-radius: 10px; background: #16171A; color: #E8E9EB; font: inherit; cursor: pointer">Turn on</button>
+      </div>
+    </sc-if>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 22px; padding: 12px 16px; background: #16171A; border: 1px solid #25272C; border-radius: 14px">
+    <div role="group" aria-label="Panel shows" style="display: flex; background: #0E0F11; border: 1px solid #2A2C31; border-radius: 10px; padding: 3px; gap: 3px">
+      <button aria-pressed="{{segStats.pressed}}" onClick="{{modeStats}}" style="height: 38px; padding: 0 14px; border: 0; border-radius: 7px; background: {{segStats.bg}}; color: {{segStats.color}}; font: inherit; font-size: 13px; font-weight: {{segStats.weight}}; cursor: pointer">Stats &amp; background</button>
+      <button aria-pressed="{{segMirror.pressed}}" onClick="{{modeMirror}}" style="height: 38px; padding: 0 14px; border: 0; border-radius: 7px; background: {{segMirror.bg}}; color: {{segMirror.color}}; font: inherit; font-size: 13px; font-weight: {{segMirror.weight}}; cursor: pointer">Desktop mirror</button>
+    </div>
+    <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; color: {{overlayLabelColor}}"><input type="checkbox" checked="{{overlayOn}}" disabled="{{mirrorOn}}" onChange="{{toggleOverlay}}" style="width: 18px; height: 18px; accent-color: {{accent}}">Overlay</label>
+    <div style="display: flex; align-items: center; gap: 12px; flex: 1 1 260px">
+      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#A6A9B0" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+      <label for="b2-bright" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Brightness</label>
+      <input id="b2-bright" type="range" min="0" max="100" value="{{bright}}" onChange="{{setBright}}" style="flex-grow: 1; accent-color: {{accent}}">
+      <span style="font-family: 'JetBrains Mono', monospace; font-size: 14px; min-width: 48px; text-align: right">{{brightLabel}}</span>
+    </div>
+    <span style="font-size: 12px; color: #9A9DA4">sampled 4:08:06 PM</span>
+  </div>
+
+  <div role="tablist" aria-label="Settings" style="display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid #25272C">
+    <sc-for list="{{tabs}}" as="t" hint-placeholder-count="4">
+      <button role="tab" aria-selected="{{t.selected}}" onClick="{{t.select}}" style="height: 44px; padding: 0 16px; margin-bottom: -1px; border: 0; border-bottom: {{t.underline}}; background: transparent; color: {{t.color}}; font: inherit; font-weight: {{t.weight}}; cursor: pointer">{{t.label}}</button>
+    </sc-for>
+  </div>
+
+  <sc-if value="{{isOverlay}}" hint-placeholder-val="{{true}}">
+    <div role="tabpanel" aria-label="Overlay" style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+      <div style="flex: 1 1 520px; min-width: 0; background: #16171A; border: 1px solid #25272C; border-radius: 14px; padding: 8px 20px">
+        <sc-for list="{{slots}}" as="s" hint-placeholder-count="6">
+          <div onMouseEnter="{{s.enter}}" onMouseLeave="{{leave}}" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 0; border-bottom: {{s.divider}}">
+            <span aria-hidden="true" style="width: 28px; height: 28px; border-radius: 8px; background: {{s.badgeBg}}; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono', monospace; font-size: 13px">{{s.n}}</span>
+            <label for="{{s.id}}" style="flex: 1 1 140px; color: #C9CBD0">{{s.pos}}</label>
+            <select id="{{s.id}}" onFocus="{{s.enter}}" onBlur="{{leave}}" style="flex: 1 1 220px; height: 44px; padding: 0 10px; background: #1D1F23; color: #E8E9EB; border: 1px solid #2E3137; border-radius: 9px; font: inherit; font-size: 13px">
+              <option>{{s.stat}}</option><option>CPU Temperature</option><option>CPU Load</option><option>GPU Temperature</option><option>GPU Load</option><option>Memory Utilization</option><option>Memory Frequency</option><option>Fan Speed</option><option>Date &amp; Time</option><option>Empty</option>
+            </select>
+          </div>
+        </sc-for>
+        <p style="margin: 12px 0; font-size: 12px; color: #9A9DA4">Hover a slot to find it on the panel. Positions are fixed by the firmware.</p>
+      </div>
+      <div style="flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+        <div style="background: #16171A; border: 1px solid #25272C; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 10px">
+          <h3 style="margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #A6A9B0">Colours</h3>
+          <label style="display: flex; align-items: center; gap: 12px; min-height: 44px; cursor: pointer"><span style="width: 28px; height: 28px; border-radius: 8px; background: {{titleColor}}; border: 1px solid #2E3137"></span><span style="flex-grow: 1">Titles</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #9A9DA4">#E5252B</span></label>
+          <label style="display: flex; align-items: center; gap: 12px; min-height: 44px; cursor: pointer"><span style="width: 28px; height: 28px; border-radius: 8px; background: #FFFFFF; border: 1px solid #2E3137"></span><span style="flex-grow: 1">Values</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #9A9DA4">#FFFFFF</span></label>
+          <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; border-top: 1px solid #222429; padding-top: 6px"><input type="checkbox" style="width: 18px; height: 18px; accent-color: {{accent}}">Coverage animation</label>
+        </div>
+        <div style="background: #16171A; border: 1px solid #25272C; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+          <h3 style="margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #A6A9B0">Units</h3>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px">
+            <span>Temperature</span>
+            <div role="group" aria-label="Temperature unit" style="display: flex; background: #0E0F11; border: 1px solid #2A2C31; border-radius: 10px; padding: 3px; gap: 3px">
+              <button aria-pressed="true" style="width: 48px; height: 36px; border: 0; border-radius: 7px; background: #2C2E34; color: #F2F3F5; font: inherit; font-weight: 600; cursor: pointer">°C</button>
+              <button aria-pressed="false" style="width: 48px; height: 36px; border: 0; border-radius: 7px; background: transparent; color: #A6A9B0; font: inherit; cursor: pointer">°F</button>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px">
+            <label for="b2-mhz">Memory MHz</label>
+            <input id="b2-mhz" type="number" value="0" style="width: 96px; height: 40px; padding: 0 10px; background: #1D1F23; color: #E8E9EB; border: 1px solid #2E3137; border-radius: 9px; font: inherit">
+          </div>
+          <p style="margin: 0; font-size: 12px; color: #9A9DA4">No Linux source without root. 0 hides Memory Frequency.</p>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{isBackground}}" hint-placeholder-val="{{false}}">
+    <div role="tabpanel" aria-label="Background" style="display: flex; flex-direction: column; gap: 20px">
+      <div style="background: #16171A; border: 1px solid #25272C; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px">
+          <h3 style="margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #A6A9B0">On the cooler</h3>
+          <span style="font-size: 12px; color: #9A9DA4">/sdcard/pcMedia</span>
+          <div style="flex-grow: 1"></div>
+          <label for="b2-play" style="font-size: 13px; color: #9A9DA4">Play</label>
+          <select id="b2-play" style="height: 40px; padding: 0 10px; background: #1D1F23; color: #E8E9EB; border: 1px solid #2E3137; border-radius: 9px; font: inherit; font-size: 13px"><option>Single, loop</option><option>Playlist in order</option><option>Playlist shuffled</option></select>
+          <button style="height: 40px; padding: 0 14px; background: #1D1F23; border: 1px solid #2E3137; border-radius: 9px; color: #E8E9EB; font: inherit; font-size: 13px; cursor: pointer">Restart video</button>
+          <button aria-label="Refresh list from the cooler" style="width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: #1D1F23; border: 1px solid #2E3137; border-radius: 9px; color: #E8E9EB; cursor: pointer"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"></path><path d="M21 3v5h-5"></path></svg></button>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px">
+          <sc-for list="{{custom}}" as="m" hint-placeholder-count="4">
+            <div style="display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: 12px; border: {{m.border}}; background: #121316; min-width: 0">
+              <button onClick="{{m.preview}}" aria-label="{{m.previewLabel}}" style="position: relative; aspect-ratio: 2240 / 1080; border: 0; border-radius: 8px; background: {{m.bg}}; cursor: pointer; padding: 0; overflow: hidden; display: flex; align-items: center; justify-content: center">
+                <span aria-hidden="true" style="width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.14); display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="#FFFFFF"><path d="M8 5v14l11-7z"></path></svg></span>
+                <sc-if value="{{m.playing}}" hint-placeholder-val="{{false}}"><span style="position: absolute; top: 6px; left: 6px; padding: 2px 8px; border-radius: 999px; background: {{accent}}; color: #FFFFFF; font-size: 11px; font-weight: 600">On panel</span></sc-if>
+                <sc-if value="{{m.previewing}}" hint-placeholder-val="{{false}}"><span style="position: absolute; top: 6px; left: 6px; padding: 2px 8px; border-radius: 999px; background: rgba(10,10,12,0.75); border: 1px solid #FF6B70; color: #FF8A8E; font-size: 11px; font-weight: 600">Previewing</span></sc-if>
+              </button>
+              <div style="display: flex; align-items: center; gap: 6px; min-width: 0">
+                <span style="flex-grow: 1; min-width: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{m.name}}</span>
+                <sc-if value="{{m.deletable}}" hint-placeholder-val="{{true}}">
+                  <button aria-label="Delete {{m.name}}" style="width: 32px; height: 32px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: #9A9DA4; cursor: pointer"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button>
+                </sc-if>
+                <sc-if value="{{m.system}}" hint-placeholder-val="{{false}}">
+                  <svg role="img" aria-label="Can't be deleted" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9A9DA4" stroke-width="2" stroke-linecap="round" style="flex-shrink: 0; margin-right: 8px"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
+                </sc-if>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 32px; font-size: 12px; color: #9A9DA4">
+                <sc-if value="{{m.listable}}" hint-placeholder-val="{{true}}">
+                  <label style="display: flex; align-items: center; gap: 6px; cursor: pointer"><input type="checkbox" checked="{{m.inList}}" onChange="{{m.togglePl}}" style="width: 16px; height: 16px; accent-color: {{accent}}">In playlist</label>
+                </sc-if>
+                <sc-if value="{{m.system}}" hint-placeholder-val="{{false}}">
+                  <span>System · Desktop mirror</span>
+                </sc-if>
+                <span>{{m.size}}</span>
+              </div>
+            </div>
+          </sc-for>
+          <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; min-height: 150px; border: 1.5px dashed #3A3D44; border-radius: 12px; box-sizing: border-box">
+            <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C9CBD0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"></path><path d="M6 10l6-6 6 6"></path><path d="M4 20h16"></path></svg>
+            <span style="font-size: 13px; color: #C9CBD0">Drop a video or image</span>
+            <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 6px">
+              <button style="height: 34px; padding: 0 12px; background: #1D1F23; border: 1px solid #2E3137; border-radius: 8px; color: #E8E9EB; font: inherit; font-size: 12px; cursor: pointer">Browse</button>
+              <label for="b2-shape" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Shape</label>
+              <select id="b2-shape" style="height: 34px; padding: 0 8px; background: #1D1F23; color: #E8E9EB; border: 1px solid #2E3137; border-radius: 8px; font: inherit; font-size: 12px"><option>Fill (crop edges)</option><option>Fit (black bars)</option></select>
+            </div>
+          </div>
+        </div>
+        <p style="margin: 0; font-size: 12px; color: #9A9DA4">Click a thumbnail to preview it above. Playlist plays in list order. Uploads are converted to 2240×1080 HEVC without sound.</p>
+      </div>
+
+      <div style="background: #16171A; border: 1px solid #25272C; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 14px">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <h3 style="margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #A6A9B0">Built-in presets</h3>
+          <span style="font-size: 12px; color: #9A9DA4">from the firmware</span>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px">
+          <sc-for list="{{presets}}" as="m" hint-placeholder-count="5">
+            <div style="display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 10px; border: {{m.border}}; background: #121316; min-width: 0">
+              <button onClick="{{m.preview}}" aria-label="{{m.previewLabel}}" style="position: relative; aspect-ratio: 2240 / 1080; border: 0; border-radius: 7px; background: {{m.bg}}; cursor: pointer; padding: 0">
+                <sc-if value="{{m.playing}}" hint-placeholder-val="{{false}}"><span style="position: absolute; top: 5px; left: 5px; padding: 2px 7px; border-radius: 999px; background: {{accent}}; color: #FFFFFF; font-size: 10px; font-weight: 600">On panel</span></sc-if>
+                <sc-if value="{{m.previewing}}" hint-placeholder-val="{{false}}"><span style="position: absolute; top: 5px; left: 5px; padding: 2px 7px; border-radius: 999px; background: rgba(10,10,12,0.75); border: 1px solid #FF6B70; color: #FF8A8E; font-size: 10px; font-weight: 600">Previewing</span></sc-if>
+              </button>
+              <label style="display: flex; align-items: center; gap: 6px; min-height: 28px; font-size: 11px; cursor: pointer; min-width: 0"><input type="checkbox" checked="{{m.inList}}" onChange="{{m.togglePl}}" style="width: 15px; height: 15px; flex-shrink: 0; accent-color: {{accent}}"><span style="font-family: 'JetBrains Mono', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{m.short}}</span></label>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{isMirror}}" hint-placeholder-val="{{false}}">
+    <div role="tabpanel" aria-label="Desktop mirror" style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+      <div style="flex: 1 1 520px; min-width: 0; background: #16171A; border: 1px solid #25272C; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 16px">
+        <button role="switch" aria-checked="{{mirrorAria}}" onClick="{{toggleMirror}}" style="display: flex; align-items: center; gap: 14px; min-height: 56px; padding: 0; border: 0; background: transparent; color: #E8E9EB; font: inherit; text-align: left; cursor: pointer">
+          <span style="flex-grow: 1; display: flex; flex-direction: column"><span style="font-size: 16px; font-weight: 600">Use the panel as a second display</span><span style="font-size: 13px; color: #9A9DA4">{{mirrorStatus}}</span></span>
+          <span aria-hidden="true" style="position: relative; width: 48px; height: 28px; flex-shrink: 0; border-radius: 999px; background: {{mirrorTrack}}"><span style="position: absolute; top: 3px; left: {{mirrorKnob}}; width: 22px; height: 22px; border-radius: 50%; background: #FFFFFF"></span></span>
+        </button>
+        <div style="display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid #222429; font-size: 13px; color: #C9CBD0">
+          <span>Adds Virtual-RYUO (2240×1080) to the right of your main monitor. Drag windows past its right edge.</span>
+          <span>Overlay and background pause while it runs. Brightness still works.</span>
+          <span>The panel only redraws when something on it changes. Turning off takes up to 10 s.</span>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-top: 14px; border-top: 1px solid #222429">
+          <span style="flex-grow: 1; display: flex; flex-direction: column"><span style="font-weight: 500">Mouse pointer</span><span style="font-size: 12px; color: #9A9DA4">Shown on the panel · screen-share choice saved</span></span>
+          <button style="height: 40px; padding: 0 14px; background: #1D1F23; border: 1px solid #2E3137; border-radius: 9px; color: #E8E9EB; font: inherit; font-size: 13px; cursor: pointer">Ask again</button>
+        </div>
+      </div>
+      <div style="flex: 1 1 300px; min-width: 0; background: #16171A; border: 1px solid #25272C; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 10px">
+        <h3 style="margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #A6A9B0">Requirements</h3>
+        <sc-for list="{{reqs}}" as="r" hint-placeholder-count="3">
+          <div style="display: flex; align-items: center; gap: 10px; min-height: 32px">
+            <svg role="img" aria-label="Met" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#34D27B" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"></path></svg>
+            <span>{{r}}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{isApp}}" hint-placeholder-val="{{false}}">
+    <div role="tabpanel" aria-label="App" style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+      <div style="flex: 1 1 520px; min-width: 0; background: #16171A; border: 1px solid #25272C; border-radius: 14px; padding: 8px 20px">
+        <h3 style="margin: 12px 0 4px; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #A6A9B0">Tray</h3>
+        <label style="display: flex; align-items: center; gap: 12px; min-height: 56px; border-bottom: 1px solid #222429; cursor: pointer">
+          <span style="flex-grow: 1; display: flex; flex-direction: column"><span>Start with the desktop session</span><span style="font-size: 12px; color: #9A9DA4">Restores the last panel state</span></span>
+          <input type="checkbox" checked style="width: 18px; height: 18px; accent-color: {{accent}}">
+        </label>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 56px; border-bottom: 1px solid #222429">
+          <label for="b2-click" style="flex-grow: 1">Left-click on the tray icon</label>
+          <select id="b2-click" style="height: 40px; padding: 0 10px; background: #1D1F23; color: #E8E9EB; border: 1px solid #2E3137; border-radius: 9px; font: inherit; font-size: 13px"><option>Open control page</option><option>Show menu</option><option>Toggle panel on / standby</option></select>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px 0">
+          <span>Brightness steps in the tray menu</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px">
+            <sc-for list="{{traySteps}}" as="b" hint-placeholder-count="4">
+              <span style="display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 4px 0 12px; border-radius: 999px; background: #1D1F23; border: 1px solid #2E3137; font-family: 'JetBrains Mono', monospace; font-size: 13px">{{b}} %<button aria-label="Remove {{b}} %" style="width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: transparent; color: #9A9DA4; cursor: pointer"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></span>
+            </sc-for>
+            <button style="height: 36px; padding: 0 14px; border-radius: 999px; border: 1px dashed #3A3D44; background: transparent; color: #C9CBD0; font: inherit; font-size: 13px; cursor: pointer">+ Add step</button>
+          </div>
+        </div>
+      </div>
+      <div style="flex: 1 1 300px; min-width: 0; background: #16171A; border: 1px solid #25272C; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 4px">
+        <h3 style="margin: 0 0 8px; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #A6A9B0">Device &amp; connection</h3>
+        <sc-for list="{{about}}" as="a" hint-placeholder-count="5">
+          <div style="display: flex; justify-content: space-between; gap: 12px; min-height: 30px; align-items: center; font-size: 13px">
+            <span style="color: #9A9DA4">{{a.k}}</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px">{{a.v}}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#E5252B","options":["#E5252B","#3B82F6","#F59E0B","#10B981"]},"titleColor":{"editor":"color","default":"#E5252B"},"$preview":{"width":1440,"height":1400}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { tab: 'overlay', mode: 'stats', overlayOn: true, screenOn: true, bright: 90, previewId: null, playingId: 'c3', playlist: ['c3'], hover: null };
+  }
+  renderVals() {
+    const st = this.state;
+    const accent = this.props.accent ?? '#E5252B';
+    const G = (a, b) => 'radial-gradient(ellipse at 30% 40%, ' + a + ' 0%, transparent 60%), radial-gradient(ellipse at 80% 70%, ' + b + ' 0%, transparent 55%), #050506';
+    const customRaw = [
+      { id: 'c1', name: '2026-01-26_20-38-31-703.mp4', size: '3.8 MB', bg: G('#3a0f2a', '#0f1a3a') },
+      { id: 'c2', name: '2026-01-26_20-04-35-774.png', size: '143 kB', bg: G('#3a1d10', '#16263a') },
+      { id: 'c3', name: '2026-01-26_22-07-49-639.mp4', size: '98 MB', bg: G('#2a1015', '#101a2a') },
+      { id: 'sys', name: 'display-black.png', size: '7 kB', bg: '#000000', system: true }
+    ];
+    const presetBgs = [G('#2a0a0a', '#0a0a2a'), G('#1a0a2a', '#2a0a1a'), G('#0a2a2a', '#0a0a1a'), G('#2a1a0a', '#0a1a2a'), G('#2a0a1a', '#1a1a1a')];
+    const presetRaw = presetBgs.map((bg, i) => ({ id: 'p' + (i + 1), name: 'RYUO_IV_HW_Info_0' + (i + 1) + '.mp4', short: 'HW_Info_0' + (i + 1), bg }));
+    const byId = {};
+    customRaw.concat(presetRaw).forEach((m) => { byId[m.id] = m; });
+    const decorate = (m, preset) => {
+      const playing = m.id === st.playingId;
+      const previewing = m.id === st.previewId;
+      return {
+        ...m,
+        system: !!m.system,
+        playing, previewing,
+        deletable: !preset && !m.system,
+        listable: !m.system,
+        inList: st.playlist.indexOf(m.id) >= 0,
+        previewLabel: playing ? m.name + ', on the panel now' : 'Preview ' + m.name + ' above',
+        border: playing ? '1.5px solid ' + accent : previewing ? '1.5px solid #FF6B70' : '1px solid #25272C',
+        preview: () => { this.setState({ previewId: playing ? null : m.id, mode: 'stats' }); },
+        togglePl: () => {
+          const pl = this.state.playlist.slice();
+          const i = pl.indexOf(m.id);
+          if (i >= 0) pl.splice(i, 1); else pl.push(m.id);
+          this.setState({ playlist: pl });
+        }
+      };
+    };
+    const custom = customRaw.map((m) => decorate(m, false));
+    const presets = presetRaw.map((m) => decorate(m, true));
+
+    const mirrorOn = st.mode === 'mirror' && st.screenOn;
+    const previewing = !!st.previewId && st.mode === 'stats' && st.screenOn;
+    const showOverlay = st.overlayOn && st.mode === 'stats' && st.screenOn;
+    const isOverlayTab = st.tab === 'overlay';
+
+    const slotDefs = [
+      { n: '1', pos: 'Left, upper', stat: 'CPU Temperature', title: 'CPU', value: '59', unit: '°C', left: '4.5%', right: 'auto', top: '20%', align: 'flex-start', t: 3.2, v: 5.6, u: 2.2 },
+      { n: '2', pos: 'Left, lower', stat: 'CPU Load', title: 'CPU', value: '2', unit: '%', left: '4.5%', right: 'auto', top: '56%', align: 'flex-start', t: 3.2, v: 5.6, u: 2.2 },
+      { n: '3', pos: 'Right, top', stat: 'GPU Temperature', title: 'GPU', value: '38', unit: '°C', left: 'auto', right: '7%', top: '16%', align: 'center', t: 2.6, v: 3.6, u: 1.8 },
+      { n: '4', pos: 'Right, middle', stat: 'GPU Load', title: 'GPU', value: '23', unit: '%', left: 'auto', right: '7%', top: '38%', align: 'center', t: 3.2, v: 4.8, u: 2.0 },
+      { n: '5', pos: 'Right, bottom', stat: 'Memory Utilization', title: 'Memory Utilization', value: '18', unit: '%', left: 'auto', right: '1.5%', top: '70%', align: 'center', t: 2.6, v: 3.4, u: 1.6 },
+      { n: '6', pos: 'Centre-right, lower', stat: 'Date & Time', title: 'TUE 27', value: '16:08', unit: '06', left: '60%', right: 'auto', top: '61%', align: 'flex-start', t: 1.6, v: 2.8, u: 1.2 }
+    ];
+    const leave = () => this.setState({ hover: null });
+    const slots = slotDefs.map((s, i) => {
+      const hot = st.hover === s.n && isOverlayTab;
+      return {
+        ...s,
+        id: 'b2-slot-' + s.n,
+        t: s.t + 'cqw', v: s.v + 'cqw', u: s.u + 'cqw',
+        outline: hot ? '2px dashed ' + accent : '0 solid transparent',
+        badgeBg: hot ? accent : '#23252A',
+        divider: i < slotDefs.length - 1 ? '1px solid #222429' : '0',
+        enter: () => this.setState({ hover: s.n })
+      };
+    });
+
+    const tabDefs = [['overlay', 'Overlay'], ['background', 'Background'], ['mirror', 'Desktop mirror'], ['app', 'App']];
+    const tabs = tabDefs.map(([id, label]) => {
+      const on = st.tab === id;
+      return { label, selected: on ? 'true' : 'false', underline: on ? '2px solid ' + accent : '2px solid transparent', color: on ? '#F2F3F5' : '#A6A9B0', weight: on ? '600' : '500', select: () => this.setState({ tab: id }) };
+    });
+
+    const segOn = { bg: '#2C2E34', color: '#F2F3F5', weight: '600', pressed: 'true' };
+    const segOff = { bg: 'transparent', color: '#A6A9B0', weight: '500', pressed: 'false' };
+    const mirrorMode = st.mode === 'mirror';
+
+    let heroHint = 'video plays here';
+    if (mirrorMode) heroHint = '';
+
+    return {
+      accent,
+      titleColor: this.props.titleColor ?? '#E5252B',
+      heroBg: mirrorMode ? '#0B0D12' : byId[st.previewId || st.playingId].bg,
+      heroHint,
+      showOverlay, previewing, mirrorOn,
+      liveChip: !previewing && st.mode === 'stats' && st.screenOn,
+      screenOff: !st.screenOn,
+      playingName: byId[st.playingId].name,
+      previewName: st.previewId ? byId[st.previewId].name : '',
+      applyPreview: () => this.setState({ playingId: this.state.previewId, previewId: null }),
+      backToLive: () => this.setState({ previewId: null }),
+      screenAria: st.screenOn ? 'true' : 'false',
+      screenLabel: st.screenOn ? 'On' : 'Standby',
+      screenLabelColor: st.screenOn ? '#7BE8AA' : '#A6A9B0',
+      screenTrack: st.screenOn ? accent : '#3A3D44',
+      screenKnob: st.screenOn ? '19px' : '3px',
+      toggleScreen: () => this.setState({ screenOn: !this.state.screenOn }),
+      goAbout: () => this.setState({ tab: 'app' }),
+      segStats: mirrorMode ? segOff : segOn,
+      segMirror: mirrorMode ? segOn : segOff,
+      modeStats: () => this.setState({ mode: 'stats' }),
+      modeMirror: () => this.setState({ mode: 'mirror', previewId: null }),
+      toggleMirror: () => this.setState({ mode: this.state.mode === 'mirror' ? 'stats' : 'mirror', previewId: null }),
+      mirrorAria: mirrorMode ? 'true' : 'false',
+      mirrorTrack: mirrorMode ? accent : '#3A3D44',
+      mirrorKnob: mirrorMode ? '23px' : '3px',
+      mirrorStatus: mirrorMode ? 'On · frame rate shows after the first 5 s' : 'Off',
+      overlayOn: st.overlayOn,
+      overlayLabelColor: mirrorMode ? '#6B6F77' : '#E8E9EB',
+      toggleOverlay: () => this.setState({ overlayOn: !this.state.overlayOn }),
+      bright: st.bright,
+      brightLabel: st.bright + ' %',
+      setBright: (e) => this.setState({ bright: Number(e.target.value) }),
+      tabs,
+      isOverlay: isOverlayTab,
+      isBackground: st.tab === 'background',
+      isMirror: st.tab === 'mirror',
+      isApp: st.tab === 'app',
+      slots, leave,
+      custom, presets,
+      reqs: ['KDE Plasma on Wayland', 'krfb installed', 'NVIDIA GPU'],
+      traySteps: ['25', '50', '75', '100'],
+      about: [
+        { k: 'Model', v: 'Ryuo IV Standard' },
+        { k: 'Firmware', v: 'V1.0.10' },
+        { k: 'Device', v: '/dev/hidraw8' },
+        { k: 'Heartbeat', v: '1.0 s ago' },
+        { k: 'HomeUI ack', v: '1.0 s ago' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
