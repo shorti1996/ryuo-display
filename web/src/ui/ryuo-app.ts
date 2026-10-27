@@ -1,4 +1,5 @@
-import { html, type PropertyDeclarations, type PropertyValues } from "lit";
+import { html, nothing, type PropertyDeclarations, type PropertyValues } from "lit";
+import { brightnessLabel } from "../brightness.ts";
 import { errorText } from "../state.ts";
 import { RyuoElement } from "./ryuo-element.ts";
 
@@ -13,11 +14,12 @@ const TAB_LABELS: Record<Tab, string> = {
 // The old page's markup in index.html, not yet ported to an element, by the selector that finds it.
 const STATIC_PARTS = {
   hero: ":scope > #hero",
-  strip: ":scope > .strip",
-  overlay: ":scope > #tp-overlay",
   background: ":scope > #tp-background",
   mirror: ":scope > #tp-mirror",
 } as const;
+// ryuod's 409 reason for standby while the second display runs; the switch shows it as its tooltip.
+const STANDBY_IN_MIRROR = "the panel shows the second display; turn that off before standby";
+const SUN = html`<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#A6A9B0" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
 type StaticPart = keyof typeof STATIC_PARTS;
 const KEY_MOVES: Record<string, (index: number) => number> = {
   ArrowRight: (index) => index + 1,
@@ -26,16 +28,33 @@ const KEY_MOVES: Record<string, (index: number) => number> = {
   End: () => TABS.length - 1,
 };
 
-/** The shell: header with the connection pill, the tabs, the App tab and the result toast. */
+/**
+ * The shell: header with the connection pill and the panel switch, the strip under the hero
+ * (overlay box, brightness, sample time), the tabs, the Overlay and App tabs, and the toast.
+ */
 export class RyuoApp extends RyuoElement {
   static override properties: PropertyDeclarations = { tab: { state: true } };
   declare tab: Tab;
   #parts: Partial<Record<StaticPart, Element>> = {};
   #focusTab = false;
+  // A drag ends wherever the pointer is released, often off the slider.
+  #endDrag = () => this.app?.actions.endDrag();
 
   constructor() {
     super();
     this.tab = "overlay";
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener("pointerup", this.#endDrag);
+    window.addEventListener("pointercancel", this.#endDrag);
+  }
+
+  override disconnectedCallback(): void {
+    window.removeEventListener("pointerup", this.#endDrag);
+    window.removeEventListener("pointercancel", this.#endDrag);
+    super.disconnectedCallback();
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
@@ -70,7 +89,10 @@ export class RyuoApp extends RyuoElement {
 
   protected override updated(changed: PropertyValues<this>): void {
     super.updated(changed);
-    for (const tab of ["overlay", "background", "mirror"] as const) {
+    // The hero is still static markup; the preview inside it is an element that needs the store.
+    const preview = this.#parts.hero?.querySelector<RyuoElement>("ryuo-stats-preview");
+    if (preview && preview.app !== this.app) preview.app = this.app;
+    for (const tab of ["background", "mirror"] as const) {
       const panel = this.#parts[tab] as HTMLElement | undefined;
       if (panel) panel.hidden = tab !== this.tab;
     }
@@ -94,6 +116,10 @@ export class RyuoApp extends RyuoElement {
           : "Not connected"
         : "connecting…";
     const firmware = !down && device?.connected && device.firmware ? ` · ${device.firmware}` : "";
+    const panel = state?.panel ?? null;
+    // ryuod refuses standby while the second display runs, so the switch is locked out then.
+    const blocked = !!panel?.on && state?.display?.on === true;
+    const sending = state?.editing.has("panel.on") ?? false;
     return html`<header id="hdr">
       <h1>RYUO IV LCD</h1>
       <div class="grow"></div>
@@ -101,11 +127,46 @@ export class RyuoApp extends RyuoElement {
         aria-live="polite" title=${errorText(state)} @click=${() => this.select("app", true)}>
         <span class=${tone ? `dot ${tone}` : "dot"} id="dot"></span><span id="conn">${conn}</span><span id="connFw">${firmware}</span>
       </button>
-      <!-- Ported with the hero; hidden until then. -->
-      <button class="pill panel-sw" id="panelSwitch" type="button" role="switch" aria-checked="true" aria-labelledby="panelName panelLabel" hidden>
-        <span id="panelName">Panel</span><span class="panel-state" id="panelLabel">On</span><span class="track sm" aria-hidden="true"></span>
+      <!-- Hidden until a state poll has carried the panel's state. -->
+      <button class="pill panel-sw" id="panelSwitch" type="button" role="switch" aria-checked=${panel?.on ? "true" : "false"}
+        aria-labelledby="panelName panelLabel" ?hidden=${!panel} ?disabled=${blocked || sending} title=${blocked ? STANDBY_IN_MIRROR : ""}
+        @click=${() => panel && this.app?.actions.sendPanel(!panel.on)}>
+        <span id="panelName">Panel</span><span class="panel-state" id="panelLabel">${panel?.on === false ? "Standby" : "On"}</span><span class="track sm" aria-hidden="true"></span>
       </button>
     </header>`;
+  }
+
+  #strip() {
+    const state = this.app?.store.state;
+    const actions = this.app?.actions;
+    const config = state?.config ?? null;
+    // The panel shows the desktop: the overlay is hidden there until the second display is off.
+    const mirror = state?.display?.on === true;
+    const label = config ? brightnessLabel(config.brightnessPercent) : null;
+    const sampledAt = state?.stats?.sampledAt;
+    const checked = (event: Event) => (event.target as HTMLInputElement).checked;
+    // The mode buttons are wired with the Desktop mirror tab.
+    return html`<div class="card strip">
+      <div class="seg" role="group" aria-label="Panel shows">
+        <button id="modeStats" type="button" aria-pressed=${mirror ? "false" : "true"}>Stats &amp; background</button>
+        <button id="modeMirror" type="button" aria-pressed=${mirror ? "true" : "false"}>Desktop mirror</button>
+      </div>
+      <label class=${mirror ? "check off" : "check"} id="statsOnLabel"
+        title=${mirror ? "The panel shows the desktop; the overlay returns when the second display is off." : "Stats overlay on the panel. Off hides it and keeps your slot choices."}><input
+        type="checkbox" id="statsOn" .checked=${config ? config.statsVisible !== false : false} ?disabled=${mirror}
+        @input=${(event: Event) => actions?.setOverlay("statsOn", { statsVisible: checked(event) })}>Overlay</label>
+      <div class="bright">
+        ${SUN}
+        <label for="brightness" class="sr-only">Brightness</label>
+        <!-- In % of the full backlight; ryuod maps it to the device scale, 0-102. 50 is a range's own default. -->
+        <input type="range" id="brightness" min="0" max="100" step="1" .value=${String(config?.brightnessPercent ?? 50)}
+          aria-valuetext=${label?.text ?? nothing} title=${label?.title ?? nothing}
+          @pointerdown=${() => actions?.drag("brightness")}
+          @input=${(event: Event) => actions?.setBrightness(Number((event.target as HTMLInputElement).value))}>
+        <span id="brightOut">${label?.text ?? ""}</span>
+      </div>
+      <span id="sampled">${sampledAt ? `sampled ${new Date(sampledAt).toLocaleTimeString()}` : ""}</span>
+    </div>`;
   }
 
   #tabs() {
@@ -132,7 +193,10 @@ export class RyuoApp extends RyuoElement {
     const parts = this.#parts;
     return html`${this.#header()}
       <main>
-        ${parts.hero} ${parts.strip} ${this.#tabs()} ${parts.overlay} ${parts.background} ${parts.mirror}
+        ${parts.hero} ${this.#strip()} ${this.#tabs()}
+        <ryuo-overlay-tab role="tabpanel" id="tp-overlay" aria-labelledby="tab-overlay" class="cols" ?hidden=${this.tab !== "overlay"}
+          .app=${this.app}></ryuo-overlay-tab>
+        ${parts.background} ${parts.mirror}
         <ryuo-app-tab role="tabpanel" id="tp-app" aria-labelledby="tab-app" class="cols" ?hidden=${this.tab !== "app"}
           .app=${this.app}></ryuo-app-tab>
       </main>

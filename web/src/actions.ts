@@ -4,10 +4,38 @@
  * that lands meanwhile does not put back the value the POST is replacing.
  */
 
-import { postOpenSettings, postPrefs, postResetChoice, postTray } from "./api.ts";
-import type { PrefsBody, TrayBody, TrayClick } from "./api-types.ts";
+import {
+  postBrightness,
+  postOpenSettings,
+  postOverlay,
+  postPanel,
+  postPrefs,
+  postResetChoice,
+  postTray,
+} from "./api.ts";
+import type { Config, PrefsBody, TrayBody, TrayClick } from "./api-types.ts";
+import { brightnessValue } from "./brightness.ts";
+import { OVERLAY_KEYS, overlayBody, rgbHex } from "./overlay.ts";
 import { report } from "./report.ts";
 import { fail, type Poll, type Store } from "./state.ts";
+
+export const OVERLAY_DEBOUNCE_MS = 300; // overlay edits within this window go out as one POST
+export const BRIGHTNESS_DEBOUNCE_MS = 150; // the slider sends once it has rested this long
+// Both brightness fields: the slider shows the percent, and a reply carries both.
+const BRIGHTNESS_KEYS = ["brightness", "brightnessPercent"] as const;
+// What a drag holds: a range under the pointer may rest between input events, and the poll
+// must not move it back under the user's finger.
+const DRAG_KEYS = { brightness: BRIGHTNESS_KEYS, opacity: ["filter"] } as const;
+
+/** The overlay controls other than the slots, each with the sentence that names its change. */
+export type OverlayControl = "statsOn" | "titleColor" | "contentColor" | "filterOn" | "opacity";
+const OVERLAY_TEXT: Record<OverlayControl, (config: Config) => string> = {
+  statsOn: (config) => (config.statsVisible ? "Stats overlay shown" : "Stats overlay hidden, slot choices kept"),
+  titleColor: (config) => `Title colour ${rgbHex(config.titleColor).toUpperCase()}`,
+  contentColor: (config) => `Value colour ${rgbHex(config.contentColor).toUpperCase()}`,
+  filterOn: (config) => `Coverage animation ${config.filter.on ? "on" : "off"}`,
+  opacity: (config) => `Coverage opacity ${config.filter.opacity} %`,
+};
 
 export const TRAY_CLICK_LABELS: Record<TrayClick, string> = {
   page: "Open control page",
@@ -49,13 +77,159 @@ export function stepProblem(text: string, steps: readonly number[]): string | nu
 
 export function createActions(store: Store, poll: Poll) {
   /** Hold `keys` in `editing` while `run` is pending. */
-  async function holding(keys: string[], run: () => Promise<void>): Promise<void> {
+  async function holding(keys: readonly string[], run: () => Promise<void>): Promise<void> {
     for (const key of keys) store.edit(key, true);
     try {
       await run();
     } finally {
       for (const key of keys) store.edit(key, false);
     }
+  }
+
+  /**
+   * A send that waits until the calls stop for `ms`. It holds `keys` from the first call until
+   * `send` runs; `send` holds them again itself (holding(), synchronously, before its first
+   * await), so the hold covers the timer and the POST with no gap between them.
+   */
+  function debounced(keys: readonly string[], ms: number, send: () => Promise<void>) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return {
+      schedule(): void {
+        if (timer === undefined) for (const key of keys) store.edit(key, true);
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          timer = undefined;
+          void send();
+          for (const key of keys) store.edit(key, false);
+        }, ms);
+      },
+      pending: () => timer !== undefined,
+    };
+  }
+
+  // What each overlay control changed since the last overlay POST, for that POST's message.
+  // Keyed by control, so two edits of one colour count once.
+  const overlayEdits = new Map<string, string>();
+  // Every overlay key, not only the edited one: the POST carries them all, and a poll during
+  // the debounce would otherwise copy another client's colour into the POST (sync.test.js).
+  const overlaySend = debounced(OVERLAY_KEYS, OVERLAY_DEBOUNCE_MS, sendOverlay);
+  const brightnessSend = debounced(BRIGHTNESS_KEYS, BRIGHTNESS_DEBOUNCE_MS, sendBrightness);
+  let dragged: readonly string[] = [];
+
+  /** POST the whole overlay as the controls hold it; the message names what changed. */
+  function sendOverlay(): Promise<void> {
+    const config = store.state.config;
+    const edits = [...overlayEdits.values()];
+    overlayEdits.clear();
+    if (!config) return Promise.resolve();
+    const done = edits.length === 1 ? edits[0] : edits.length ? `${edits.length} overlay changes` : "Overlay";
+    const body = overlayBody(config);
+    return holding(OVERLAY_KEYS, async () => {
+      try {
+        const reply = await postOverlay(body);
+        const saved = Object.fromEntries(OVERLAY_KEYS.map((key) => [key, reply.config[key]])) as Partial<Config>;
+        store.saw("config", saved);
+        // A newer edit waiting in the debounce keeps its values; they go out with its POST.
+        const now = store.state.config;
+        if (now && !overlaySend.pending()) store.patch({ config: { ...now, ...saved } });
+        const [text, detail] = report(reply, done);
+        store.say(text, false, detail);
+      } catch (error) {
+        // The controls keep the user's values, and the next overlay edit sends them again.
+        fail(store, error, `${done} not saved`);
+      }
+    });
+  }
+
+  /** One overlay edit: the controls and preview show it at once; the POST waits for the debounce. */
+  function editOverlay(key: string, change: Partial<Config>, text: (config: Config) => string): void {
+    const config = store.state.config;
+    if (!config) return;
+    const next = { ...config, ...change };
+    store.patch({ config: next });
+    overlayEdits.set(key, text(next));
+    overlaySend.schedule();
+  }
+
+  function setOverlay(control: OverlayControl, change: Partial<Config>): void {
+    editOverlay(control, change, OVERLAY_TEXT[control]);
+  }
+
+  /** Put `item` ("" for none) in slot `index` (0-5). */
+  function setSlot(index: number, item: string): void {
+    const items = [...(store.state.config?.items ?? [])];
+    items[index] = item;
+    editOverlay(`slot${index}`, { items }, () => `Slot ${index + 1}: ${item || "empty"}`);
+  }
+
+  /** Outline slot `index` in the preview, or none. */
+  function showSlot(index: number | null): void {
+    if (store.state.hotSlot !== index) store.patch({ hotSlot: index });
+  }
+
+  /** The slider moved: show the percent at once, send it once the slider rests. */
+  function setBrightness(percent: number): void {
+    const config = store.state.config;
+    if (!config) return;
+    store.patch({ config: { ...config, brightnessPercent: percent, brightness: brightnessValue(percent) } });
+    brightnessSend.schedule();
+  }
+
+  function sendBrightness(): Promise<void> {
+    const percent = store.state.config?.brightnessPercent;
+    if (percent === undefined) return Promise.resolve();
+    return holding(BRIGHTNESS_KEYS, async () => {
+      try {
+        const reply = await postBrightness({ percent });
+        store.saw("config", { brightness: reply.value, brightnessPercent: reply.percent });
+        // Some percentages land 1 % off on the device scale; show what the panel got, unless
+        // the slider has moved on since.
+        const config = store.state.config;
+        if (config && !brightnessSend.pending() && !dragged.includes("brightness")) {
+          store.patch({ config: { ...config, brightness: reply.value, brightnessPercent: reply.percent } });
+        }
+        const [text, detail] = report(reply, `Brightness ${reply.percent ?? percent} %`);
+        store.say(text, false, detail);
+      } catch (error) {
+        fail(store, error, "Brightness not changed");
+      }
+    });
+  }
+
+  /** A pointer went down on a range: hold its keys until the pointer is released (endDrag). */
+  function drag(control: keyof typeof DRAG_KEYS): void {
+    endDrag();
+    dragged = DRAG_KEYS[control];
+    for (const key of dragged) store.edit(key, true);
+  }
+
+  function endDrag(): void {
+    for (const key of dragged) store.edit(key, false);
+    dragged = [];
+  }
+
+  /**
+   * Panel on or standby. The switch shows the click at once; a refusal turns it back, as the
+   * old page did, to the opposite of what was asked.
+   */
+  function sendPanel(on: boolean): Promise<void> {
+    store.patch({ panel: { on } });
+    return holding(["panel.on"], async () => {
+      try {
+        const reply = await postPanel(on);
+        store.saw("panel", reply.panel);
+        store.patch({ panel: reply.panel });
+        if (!reply.changed) {
+          store.say(`The panel is already ${on ? "on" : "in standby"}`);
+        } else {
+          const [text, detail] = report(reply, on ? "Panel on" : "Panel in standby");
+          store.say(text, false, detail);
+        }
+      } catch (error) {
+        store.patch({ panel: { on: !on } });
+        fail(store, error, on ? "Panel not turned on" : "Panel not put in standby");
+      }
+    });
   }
 
   /**
@@ -168,6 +342,13 @@ export function createActions(store: Store, poll: Poll) {
   }
 
   return {
+    setOverlay,
+    setSlot,
+    showSlot,
+    setBrightness,
+    drag,
+    endDrag,
+    sendPanel,
     sendTray,
     addTrayStep,
     sendPrefs,

@@ -3,9 +3,14 @@
  * carrying ryuod's own reason otherwise, so a caller can show `error.message` as it is.
  */
 import type {
+  BrightnessBody,
+  BrightnessReply,
   CatalogReply,
   MediaReply,
   OpenSettingsReply,
+  OverlayBody,
+  OverlayReply,
+  PanelReply,
   PrefsBody,
   PrefsReply,
   ResetChoiceReply,
@@ -43,6 +48,9 @@ export const getStats = () => api<StatsReply>("/api/stats");
 export const getCatalog = () => api<CatalogReply>("/api/catalog");
 /** `refresh`: ryuod asks the cooler (or adb) again instead of answering from its cached list. */
 export const getMedia = (refresh = false) => api<MediaReply>(`/api/media${refresh ? "?refresh=1" : ""}`);
+export const postOverlay = (body: OverlayBody) => api<OverlayReply>("/api/overlay", body);
+export const postBrightness = (body: BrightnessBody) => api<BrightnessReply>("/api/brightness", body);
+export const postPanel = (on: boolean) => api<PanelReply>("/api/panel", { on });
 export const postPrefs = (body: PrefsBody) => api<PrefsReply>("/api/prefs", body);
 export const postTray = (body: TrayBody) => api<TrayReply>("/api/tray", body);
 export const postResetChoice = () => api<ResetChoiceReply>("/api/display/reset-choice", {});

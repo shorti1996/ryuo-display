@@ -42,9 +42,14 @@ export interface AppState {
   media: MediaLists;
   toast: Toast;
   /**
+   * The slot (0-5) whose row is under the pointer or has focus, or null. The slot picker sets it
+   * and the preview outlines that slot on the panel, labelled with its number when it is empty.
+   */
+  hotSlot: number | null;
+  /**
    * Keys the user is changing: a focused select, a dragged slider, a debounce or POST still
    * pending. The poll leaves these keys as they are. Config keys are bare ("tempUnit"); the
-   * tray's and the desktop's carry their section ("tray.leftClick").
+   * other sections' carry their section ("tray.leftClick", "panel.on").
    */
   editing: ReadonlySet<string>;
 }
@@ -65,6 +70,7 @@ function initialState(): AppState {
     catalog: [],
     media: { source: null, fetchedAt: null, preset: [], custom: [] },
     toast: { text: "", bad: false, detail: "", shown: false },
+    hotSlot: null,
     editing: new Set(),
   };
 }
@@ -99,8 +105,8 @@ export function mergeAround<T extends object>(
   return copied;
 }
 
-type Section = "config" | "tray" | "desktop";
-const PREFIX: Record<Section, string> = { config: "", tray: "tray.", desktop: "desktop." };
+type Section = "config" | "tray" | "desktop" | "panel";
+const PREFIX: Record<Section, string> = { config: "", tray: "tray.", desktop: "desktop.", panel: "panel." };
 
 export class Store {
   state: AppState = initialState();
@@ -234,10 +240,12 @@ export function createPoll(store: Store) {
       void loadMedia(false);
     }
     const first = !store.state.config;
-    store.patch({ device: reply.device, panel: reply.panel, display: reply.display, upload: reply.upload });
+    store.patch({ device: reply.device, display: reply.display, upload: reply.upload });
     const changed = store.merge("config", reply.config);
     store.merge("tray", reply.tray);
     store.merge("desktop", reply.desktop);
+    // Merged like the settings, so the switch keeps the user's click while its POST runs.
+    store.merge("panel", reply.panel);
     // A unit change from another client: the catalog's units follow tempUnit. The first poll
     // needs no refetch; the startup sequence fetched the catalog just before it.
     if (!first && changed.some((key) => UNIT_KEYS.includes(key))) void refreshCatalog();

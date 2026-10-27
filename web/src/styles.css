@@ -374,5 +374,6 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
 }
 
 /* ---------- custom elements ---------- */
-/* The shell wraps the header, main and toast; it adds no box, so body's layout stays as it was. */
-ryuo-app { display: contents; }
+/* Wrappers that add no box, so the old page's layout stays as it was: the shell around the header,
+   main and toast, the slot picker in the slot card, the preview in the hero. */
+ryuo-app, ryuo-slot-picker, ryuo-stats-preview { display: contents; }

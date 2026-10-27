@@ -216,3 +216,34 @@ changed it, and those changes must be ported into the new page.
 - Step 1 risk, unproven: the left-click select's hold is released only on `blur`. The old page
   read `document.activeElement` on every poll and recovered from a missed blur by itself. If a
   focused control ever stays held, add a poll-time check against `activeElement`.
+- Step 2: the overlay debounce is 300 ms, as in the old page (`sendOverlay`) and the tests that
+  count it; "Editing guard" above says 400 ms, which is the media select's (`PLAY_DEBOUNCE_MS`).
+- Step 2: the same blur-only release now covers the six slot selects (`items`), the two colour
+  inputs and memory MHz. A range holds its keys only while dragged; the shell's window
+  `pointerup` and `pointercancel` end the drag (`actions.endDrag`).
+- Step 2: a focused control holds only its own key. The old page held its whole group on focus,
+  so a focused slot select also kept another client's colour out until blur; now the colour
+  arrives, and a slot change made after it sends it back unchanged. No test tells the two apart.
+- Step 2: brightness holds `brightness` and `brightnessPercent` together, during the drag, the
+  150 ms debounce and the POST: the slider shows the percent and a reply carries both.
+- Step 2: `errors.test.js` and `sync.test.js` stay on the old harness. Blocking cases: errors
+  "treats a 200 with ok:false as an error" (Restart video), "shows a failed GET /api/state in the
+  header and clears it on the next good poll" (the hero's standby view), "loads the media list
+  once the daemon answers" (media tiles); sync "reaches the playlist, play mode, live chip and
+  badges on the next poll" and "a playlist tick waiting in its debounce wins over a poll". Their
+  other cases, and the features cases that read only the header, strip and toast, are copied
+  unchanged into `overlay-tab.test.js`, as step 1 did; the copies go when the source file moves.
+- Step 2: the preview's six slots and filter layer are a `<ryuo-stats-preview>` inside the hero,
+  which is still static markup; the shell hands it `app`. Step 4's `ryuo-hero` renders
+  `statsPreview()` itself and the element goes. The slot under the pointer is `hotSlot` in
+  `AppState`, since the picker sets it and the preview draws it.
+- Step 2: the panel is merged like a settings section (key `panel.on`), so the switch keeps the
+  click while its POST runs and is disabled meanwhile. The hero's Turn on button, also bound to
+  `sendPanel`, is wired with the hero in step 4.
+- Step 2: the strip is drawn by the shell. Its mode buttons render but are not wired (step 3).
+  The overlay box and the panel switch read `display.on` where the old page read its own
+  `displayWant`, which also flips at the click; step 3 must replace it with the Mirror tab's.
+- Step 2: `actions.sendPrefs` (step 1) writes the value into the store before the POST and keeps
+  it on a refusal. A refused memory MHz (25000) therefore stays in `config.memoryMHz`, and the
+  slot lists offer Memory Frequency until the next accepted value; the old page kept ryuod's 0
+  there and showed the 25000 in the field only. No test covers it.

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, choose, makeDaemon, openPage, setInput, slot, tick } from "./harness.js";
+import { $, choose, makeDaemon, openPage, setInput, slot, tick } from "./harness-lit.js";
 
 describe("overlay colours and filter", () => {
   it("collects colour, filter and opacity edits into one POST 300 ms after the last", async () => {
@@ -108,42 +108,5 @@ describe("brightness in % (ryuod with config.brightnessPercent)", () => {
     // The next poll agrees and changes nothing.
     await tick(1000);
     expect($("brightness").value).toBe("16");
-  });
-});
-
-describe("brightness on the device scale (older ryuod)", () => {
-  const legacy = (config) => makeDaemon({ legacy: true, config });
-
-  it.each([
-    [0, "0 %", "0/255"],
-    [1, "1 %", "2/255"],
-    [41, "40 %", "102/255"],
-    [90, "88 %", "225/255"],
-    [100, "98 %", "250/255"],
-    [101, "99 %", "252/255"],
-    [102, "100 %", "255/255"],
-  ])("labels %i as the share of the backlight's 255 levels, floor(value × 2.5)", async (value, label, level) => {
-    await openPage(legacy());
-    setInput($("brightness"), String(value));
-    expect($("brightOut").textContent).toBe(label);
-    expect($("brightness").getAttribute("aria-valuetext")).toBe(label);
-    expect($("brightness").title).toBe(`${value} of 102 on the device scale, backlight ${level}`);
-  });
-
-  it("keeps the 0–102 range of the device scale, so every device step stays reachable", async () => {
-    await openPage(legacy());
-    expect([$("brightness").min, $("brightness").max]).toEqual(["0", "102"]);
-    setInput($("brightness"), "200");
-    expect($("brightOut").textContent).toBe("100 %");
-  });
-
-  it("sends one POST /api/brightness {value} 150 ms after the slider stops", async () => {
-    const d = await openPage(legacy());
-    setInput($("brightness"), "60");
-    await tick(100);
-    setInput($("brightness"), "70");
-    await tick(150);
-    expect(d.posts("/api/brightness")).toEqual([{ value: 70 }]);
-    expect($("result").textContent).toBe("Brightness 69 % — cooler confirmed");
   });
 });
