@@ -17,8 +17,12 @@ export default defineConfig({
     },
   },
   server: {
+    // The README names http://127.0.0.1:5173/; Vite's default host is ::1, which that URL misses.
+    host: "127.0.0.1",
     // ryuod answers only Host 127.0.0.1:8746 or localhost:8746 (ryuod.host_ok); changeOrigin
     // rewrites the Host header to the target's, so the dev server's port 5173 is not refused.
-    proxy: { "/api": { target: "http://127.0.0.1:8746", changeOrigin: true } },
+    // Anchored with a trailing slash: a bare "/api" prefix would also send the source module
+    // /api.ts to ryuod and leave the page unstyled with no console error.
+    proxy: { "^/api/": { target: "http://127.0.0.1:8746", changeOrigin: true } },
   },
 });
