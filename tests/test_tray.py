@@ -23,6 +23,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 import ryuo_tray
@@ -96,7 +97,7 @@ def test_daemon_down(env, tray):
     tray.refresh()
     assert tray.status.text() == "ryuod is not running"
     assert tray.tray.toolTip() == "RYUO LCD — ryuod is not running"
-    assert is_icon(tray, "off")
+    assert is_icon(tray, "offline")
     assert not tray.stats.isEnabled()
     assert not tray.bright_menu.menuAction().isEnabled()
     assert not tray.stop.isEnabled()
@@ -108,7 +109,7 @@ def test_cooler_missing(env, tray):
     env.state["value"] = {"ok": True, "device": {"connected": False}, "config": {"statsVisible": True, "brightness": 50}}
     tray.refresh()
     assert tray.status.text() == "ryuod running, cooler not connected"
-    assert is_icon(tray, "off")
+    assert is_icon(tray, "offline")
     assert tray.stats.isEnabled() and tray.stop.isEnabled()
     assert not tray.start.isVisible()
     assert tray.stats.isChecked()
@@ -121,7 +122,7 @@ def test_connected(env, tray):
     env.state["value"]["config"]["statsVisible"] = False
     tray.refresh()
     assert tray.status.text() == "Ryuo IV Standard · V1.0.10"
-    assert is_icon(tray, "on")
+    assert is_icon(tray, "live")
     assert not tray.stats.isChecked()
     assert [v for v, a in tray.bright.items() if a.isChecked()] == [75]
 
@@ -138,7 +139,7 @@ def test_state_toggles_back_to_down(env, tray):
     tray.refresh()
     env.state["value"] = None
     tray.refresh()
-    assert is_icon(tray, "off")
+    assert is_icon(tray, "offline")
     assert tray.start.isVisible()
 
 
@@ -173,6 +174,8 @@ def test_second_display_follows_state_and_posts(env, tray):
     env.state["value"] = {**CONNECTED, "display": {"on": True, "state": "starting"}}
     tray.refresh()
     assert tray.display.isChecked()
+    assert is_icon(tray, "mirror")
+    assert tray.tray.toolTip() == "RYUO LCD — Ryuo IV Standard · V1.0.10 · second display"
 
 
 def test_second_display_disabled_without_support_or_daemon(env, tray):
@@ -239,6 +242,12 @@ def test_start_without_unit_spawns_ryuod(env, tray, runtime_dir):
     assert kw["stdin"] == FakeSubprocess.DEVNULL
     assert kw["stdout"].name == str(runtime_dir / "ryuod.log")
     assert not any(a[:2] == ["systemctl", "--user"] and a[2] != "cat" for a in env.sub.runs)
+
+
+def test_stop_item_names_the_daemon_not_standby(tray):
+    # "Panel on" is the standby switch; this item stops ryuod.
+    assert tray.stop.text() == "Stop ryuod"
+    assert tray.panel.text() == "Panel on"
 
 
 def test_stop_with_unit(env, tray):
@@ -384,8 +393,215 @@ def test_no_system_tray_exits(env, monkeypatch):
     assert ei.value.code == "ryuo_tray: no system tray available"
 
 
-def test_make_icon(qapp):
-    icon = ryuo_tray.make_icon("#E5252B")
-    img = icon.pixmap(64, 64).toImage()
-    assert img.pixelColor(8, 30).name() == "#e5252b"
+# ---------------------------------------------------------------- icons
+
+
+@pytest.mark.parametrize(
+    ("state", "icon"),
+    [
+        (None, "offline"),
+        ({"device": {"connected": False}, "display": {"on": True}}, "offline"),
+        (CONNECTED, "live"),  # an older ryuod: no "display" key
+        ({**CONNECTED, "display": None}, "live"),
+        ({**CONNECTED, "display": {"on": False, "state": "off"}}, "live"),
+        ({**CONNECTED, "display": {"on": True, "state": "retrying"}}, "mirror"),
+    ],
+)
+def test_icon_state(state, icon):
+    assert ryuo_tray.icon_state(state) == icon
+
+
+def test_every_icon_file_exists():
+    for state in ryuo_tray.ICON_STATES:
+        for path in ryuo_tray.icon_files(state):
+            assert os.path.isfile(path), path
+    # The desktop entry's Icon=ryuo-lcd.
+    assert os.path.isfile(os.path.join(ryuo_tray.ICON_DIR, "hicolor", "scalable", "apps", "ryuo-lcd.svg"))
+
+
+@pytest.fixture
+def icon_theme(qapp, tmp_path):
+    """Qt's icon theme pointed at tmp_path, restored afterwards."""
+    paths, name = QIcon.themeSearchPaths(), QIcon.themeName()
+    QIcon.setThemeSearchPaths([str(tmp_path)])
+    QIcon.setThemeName("hicolor")
+    yield tmp_path
+    QIcon.setThemeSearchPaths(paths)
+    QIcon.setThemeName(name)
+
+
+def test_installed_icon_is_loaded_by_name(icon_theme, capsys):
+    # The repo's icon directories under a hicolor theme, which on a real system gets its
+    # index.theme from hicolor-icon-theme.
+    theme = icon_theme / "hicolor"
+    theme.mkdir()
+    for size in ("16x16", "22x22", "scalable"):
+        os.symlink(os.path.join(ryuo_tray.ICON_DIR, "hicolor", size), theme / size)
+    (theme / "index.theme").write_text(
+        "[Icon Theme]\nName=Hicolor\nDirectories=16x16/status,22x22/status,scalable/status\n"
+        "[16x16/status]\nSize=16\nType=Fixed\n[22x22/status]\nSize=22\nType=Fixed\n"
+        "[scalable/status]\nSize=22\nMinSize=8\nMaxSize=512\nType=Scalable\n"
+    )
+    icon = ryuo_tray.make_icon("live")
+    assert icon.name() == "ryuo-lcd-live-symbolic"  # what Qt sends Plasma as IconName
+    assert capsys.readouterr().err == ""
+
+
+def test_uninstalled_icon_falls_back_to_repo_files(icon_theme, capsys):
+    icon = ryuo_tray.make_icon("offline")
+    assert icon.name() == ""
+    assert "ryuo-lcd-offline-symbolic is not installed" in capsys.readouterr().err
+    # Drawn, not blank: a blank one means Qt's SVG image plugin is missing.
+    img = icon.pixmap(22, 22).toImage()
     assert img.pixelColor(0, 0).alpha() == 0
+    assert img.pixelColor(18, 16).name() == "#da4453"  # the red error badge
+
+
+# ---------------------------------------------------------------- panel switch and tray settings from ryuod
+
+NEW = {
+    **CONNECTED,
+    "display": {"on": False, "state": "off"},
+    "panel": {"on": True},
+    "tray": {"autostart": True, "leftClick": "page", "brightnessSteps": [25, 50, 75, 100],
+             "brightnessStepValues": [26, 51, 76, 102], "leftClickOptions": ["page", "menu", "panel", "stats"]},
+}
+
+
+def state_with(**changes):
+    st = json.loads(json.dumps(NEW))
+    for key, value in changes.items():
+        st[key] = {**st[key], **value} if isinstance(st.get(key), dict) else value
+    return st
+
+
+def test_panel_item_follows_state_and_posts(env, tray):
+    env.state["value"] = state_with()
+    tray.refresh()
+    assert tray.panel.isEnabled() and tray.panel.isChecked()
+    tray.panel.trigger()
+    assert ("/api/panel", {"on": False}) in env.calls
+    env.state["value"] = state_with(panel={"on": False})
+    tray.refresh()
+    assert not tray.panel.isChecked()
+    assert is_icon(tray, "standby")
+    assert tray.tray.toolTip() == "RYUO LCD — Ryuo IV Standard · V1.0.10 · panel in standby"
+    assert not tray.display.isEnabled()  # ryuod refuses the second display in standby
+
+
+def test_panel_item_disabled_while_the_second_display_is_on_or_ryuod_is_old(env, tray):
+    env.state["value"] = state_with(display={"on": True, "state": "on"})
+    tray.refresh()
+    assert not tray.panel.isEnabled()
+    env.state["value"] = CONNECTED  # no "panel" key
+    tray.refresh()
+    assert not tray.panel.isEnabled() and tray.panel.isChecked()
+
+
+def test_brightness_steps_come_from_ryuod_and_post_percent(env, tray):
+    env.state["value"] = state_with(tray={"brightnessSteps": [10, 60], "brightnessStepValues": [10, 61]},
+                                    config={"brightness": 61})
+    tray.refresh()
+    assert visible_steps(tray) == ["10 %", "60 %"]
+    assert [v for v, a in tray.bright.items() if a.isChecked()] == [60]
+    tray.bright[10].trigger()
+    assert ("/api/brightness", {"percent": 10}) in env.calls
+    env.state["value"] = state_with(config={"brightness": 102})
+    tray.refresh()
+    assert visible_steps(tray) == ["25 %", "50 %", "75 %", "100 %"]
+    assert [v for v, a in tray.bright.items() if a.isChecked()] == [100]
+    tray.bright[25].trigger()  # the slot that showed 10 % now posts 25 %
+    assert env.calls[-2] == ("/api/brightness", {"percent": 25})
+
+
+def visible_steps(tray):
+    return [a.text() for a in tray.bright_menu.actions() if a.isVisible()]
+
+
+def test_brightness_submenu_keeps_its_items_and_only_hides_them(env, tray):
+    """Plasma does not redraw a submenu after items are removed, but follows visibility changes."""
+    assert ryuo_tray.STEP_SLOTS == 8  # ryuod's TRAY_STEPS_MAX
+    items = list(tray.bright_menu.actions())
+    assert len(items) == ryuo_tray.STEP_SLOTS
+    assert all(a.actionGroup() is tray.bright_group for a in items)
+    for steps in ([75, 85, 100], [75, 100], list(range(10, 90, 10)), [50]):
+        env.state["value"] = state_with(tray={"brightnessSteps": steps,
+                                              "brightnessStepValues": [round(s * 1.02) for s in steps]},
+                                        config={"brightness": round(steps[-1] * 1.02)})
+        tray.refresh()
+        assert tray.bright_menu.actions() == items
+        assert visible_steps(tray) == [f"{s} %" for s in steps]
+        assert [a.text() for a in items if a.isChecked()] == [f"{steps[-1]} %"]
+    assert not any(a.isChecked() for a in items if not a.isVisible())
+
+
+def test_old_ryuod_gets_device_values(env, tray):
+    env.state["value"] = CONNECTED  # no "tray" key: steps are device values, posted as "value"
+    tray.refresh()
+    tray.bright[50].trigger()
+    assert ("/api/brightness", {"value": 50}) in env.calls
+
+
+@pytest.mark.parametrize(("click", "state", "posted"), [
+    ("panel", {}, ("/api/panel", {"on": False})),
+    ("panel", {"panel": {"on": False}}, ("/api/panel", {"on": True})),
+    ("stats", {}, ("/api/overlay", {"statsVisible": False})),
+])
+def test_left_click_toggles(env, tray, click, state, posted):
+    env.state["value"] = state_with(tray={"leftClick": click}, **state)
+    tray.refresh()
+    tray.on_activated(QSystemTrayIcon.Trigger)
+    assert posted in env.calls
+    assert env.opened == []
+
+
+def test_left_click_shows_the_menu(env, tray, monkeypatch):
+    env.state["value"] = state_with(tray={"leftClick": "menu"})
+    tray.refresh()
+    shown = []
+    monkeypatch.setattr(tray.menu, "popup", shown.append)
+    tray.on_activated(QSystemTrayIcon.Trigger)
+    assert len(shown) == 1 and env.opened == []
+
+
+def test_left_click_toggle_with_ryuod_down_warns(env, tray):
+    env.state["value"] = state_with(tray={"leftClick": "panel"})
+    tray.refresh()
+    env.state["value"] = None
+    tray.tray = mock.MagicMock(wraps=tray.tray)
+    tray.on_activated(QSystemTrayIcon.Trigger)
+    assert tray.tray.showMessage.call_args.args[:2] == ("RYUO LCD", "ryuod did not answer")
+    assert not any(path == "/api/panel" for path, _ in env.calls)
+
+
+def test_refused_post_shows_ryuods_error(env, tray):
+    env.state["post"] = {"ok": False, "error": "the panel is in standby; turn it on before the second display"}
+    tray.tray = mock.MagicMock(wraps=tray.tray)
+    tray.post("/api/display", {"on": True})
+    assert tray.tray.showMessage.call_args.args[:2] == (
+        "RYUO LCD", "the panel is in standby; turn it on before the second display")
+
+
+def test_api_returns_the_error_body_of_a_refusal(monkeypatch):
+    class Refusing(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            data = b'{"ok":false,"error":"busy"}'
+            self.send_response(409)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Refusing)
+    t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    t.start()
+    monkeypatch.setattr(ryuo_tray, "URL", f"http://127.0.0.1:{srv.server_address[1]}")
+    try:
+        assert ryuo_tray.api("/api/panel", {"on": False}) == {"ok": False, "error": "busy"}
+    finally:
+        srv.shutdown()
+        srv.server_close()

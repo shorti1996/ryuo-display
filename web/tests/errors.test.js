@@ -122,7 +122,7 @@ describe("daemon down", () => {
     d.down = false;
     await tick(1000);
     expect($("conn").textContent).toBe("Connected");
-    expect($("brightness").value).toBe("77");
+    expect($("brightness").value).toBe("75");  // 77 on the device scale, in %
     expect(slot(0).value).toBe("CPU Temperature");
     expect($("ps1").classList.contains("hidden")).toBe(false);
     // The catalog is retried every 15 s; by then the options are grouped normally.

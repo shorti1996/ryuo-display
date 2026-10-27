@@ -35,7 +35,7 @@ describe("another client's change", () => {
       tempUnit: "Fahrenheit", memoryMHz: 6000,
     });
     await tick(1000);
-    expect($("brightness").value).toBe("35");
+    expect($("brightness").value).toBe("34");  // 35 on the device scale, in %
     expect($("brightOut").textContent).toBe("34 %");
     expect(slot(0).value).toBe("GPU Load");
     expect(preview(1).title).toBe("GPU");
@@ -97,7 +97,7 @@ describe("a group the user is editing keeps the user's values", () => {
     $("brightness").dispatchEvent(new Event("pointerdown"));
     d.config.brightness = 20;
     await tick(1000);
-    expect($("brightness").value).toBe("100");
+    expect($("brightness").value).toBe("98");
     window.dispatchEvent(new Event("pointerup"));
     await tick(1000);
     expect($("brightness").value).toBe("20");

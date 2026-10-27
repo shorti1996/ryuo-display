@@ -55,6 +55,7 @@ What gets installed:
 | `~/.config/systemd/user/ryuod.service` | `make install` | runs `ryuod.py`; enabled and started |
 | `~/.local/share/applications/ryuo-tray.desktop` | `make install` | "RYUO LCD" in the start menu |
 | `~/.config/autostart/ryuo-tray.desktop` | `make install` | starts the tray icon at login |
+| `~/.local/share/icons/hicolor/*/{apps,status}/ryuo-lcd*.svg` | `make install` | the tray and start-menu icons |
 
 The installed unit and launchers run the code from this checkout. If you move the directory, run
 `make install` again.
@@ -71,8 +72,9 @@ The two parts start at different times:
 
 1. `systemctl --user status ryuod` shows `active (running)`.
 2. http://127.0.0.1:8746/ opens the control page, and its status line says the cooler is connected.
-3. The tray shows a panel-shaped icon. It is red while the daemon drives the cooler, grey while
-   the daemon is down or the cooler is not found.
+3. The tray shows the pump block, in the panel's text colour (white on a dark panel). It shows a
+   pointer on the pump while the panel is a second display, and is dimmed with a red dot while the
+   daemon is down or the cooler is not found.
 4. The pump screen shows a video with stats over it.
 
 ## Using it
@@ -99,13 +101,23 @@ firmware's fan slot, so the panel always prints "RPM" as their unit. The label c
 | item | does |
 |---|---|
 | status line | daemon and cooler state, product and firmware |
+| Panel on | unticked, the panel shows the cooler's standby video while the daemon keeps running; ticked again, it shows your background, stats and brightness. Disabled while the panel is a second display. |
 | Show stats on panel | toggles the overlay, same as the switch on the page |
-| Use panel as second display | same as the second-display switch on the page |
-| Brightness | 25, 50, 75 or 100 |
-| Open control page | opens http://127.0.0.1:8746/ (left-clicking the icon does the same) |
+| Use panel as second display | same as the second-display switch on the page; disabled while the panel is in standby |
+| Brightness | in % of the full backlight; 25, 50, 75 and 100 unless you set other steps on the page |
+| Open control page | opens http://127.0.0.1:8746/ |
 | Start ryuod | shown only while the daemon is down; starts `ryuod.service` |
-| Stop (panel goes to standby) | stops the daemon; the panel shows the standby video |
+| Stop ryuod | stops the daemon; the panel shows the standby video until the daemon starts again |
 | Quit tray | closes the icon; the daemon keeps running |
+
+Left-clicking the icon opens the control page. On the page you can set it to show the menu,
+switch the panel between on and standby, or show and hide the stats instead, choose up to 8
+brightness steps, and turn off **Start with desktop session**, which removes
+`~/.config/autostart/ryuo-tray.desktop` (`make install` adds it back). The daemon saves these
+settings in `state.json`, and the tray picks them up within 3 s.
+
+While the panel is in standby, brightness, overlay and background changes are saved and shown when
+it comes back on. Standby lasts until you switch it off or the daemon restarts.
 
 Starting "RYUO LCD" from the start menu while the tray already runs opens the control page
 instead of adding a second icon.
@@ -130,7 +142,8 @@ by you), so later starts, including the one at login, skip the dialog. The dialo
 that token no longer works, for example after the token file was deleted or Plasma forgot the
 permission. If you cancel the dialog, or nobody answers it within 120 s, the panel still shows the
 virtual monitor, without the pointer, and the page says why; turning the switch off and on asks
-again. To be asked again on the next start, delete the token: `rm ~/.config/ryuo/display-portal-token`.
+again. To be asked again on the next start, press **Ask again** on the page, which deletes the token
+(`rm ~/.config/ryuo/display-portal-token` does the same).
 
 - The page shows the state: Starting, then On with the frames/s and Mb/s sent to the panel, averaged
   over 5 s, and whether the pointer is shown. A still desktop sends no frames, and the panel keeps
@@ -193,6 +206,9 @@ tested here; only H.264 MP4 files have been played on the test unit.
 | After **Stop** in the tray the daemon stays stopped | `ryuod` exits with status 0 on SIGTERM, and the unit only restarts it after a failure (non-zero exit). It starts again on **Start ryuod** or at the next login. |
 | The daemon stopped after running `./ryuo.py play` | Only one program can drive the panel; the newest one takes over and the other exits cleanly, so systemd does not restart the daemon. Stop `play` with `./ryuo.py stop`, then start the daemon from the tray. |
 | No tray icon | The desktop has no StatusNotifier tray. On GNOME, install the AppIndicator extension. The daemon and the control page work without the tray. |
+| Tray icon is blank after `make install` | Plasma looked the icon up before it was installed and does not look again. Restart the Plasma shell: `systemctl --user restart plasma-plasmashell.service` (the panel disappears for a few seconds). `make install` prints this when it adds the icons for the first time. |
+| Tray still shows the old icon or menu after `make install` | `make install` restarts the daemon, not a running tray. Quit the tray from its menu and start "RYUO LCD" again. |
+| Tray icon stays dark on a dark panel | The icons are not installed, so the tray sends Plasma the repo's files as pixels and Plasma cannot recolour them. The tray prints `ryuo-lcd-…-symbolic is not installed` to stderr. Run `make install`, then quit and restart the tray. |
 | `Permission denied` on `/dev/hidraw*`, or "RYUO IV HID interface not found" | The udev rule is missing or not applied yet. Run `make install-udev`, then unplug and replug the cooler's USB header (or reboot), or run `sudo udevadm trigger`. |
 | Daemon exits with `cannot bind 127.0.0.1:8746` | Another program uses port 8746, which the tray and the page expect. Free the port; systemd retries every 5 s. |
 | The stats overlay disappears for about 2 s every 5 min | The cooler's own burn-in protection plays a short screensaver clip. The firmware resets that timer only by restarting the video, so the daemon leaves it on. |
@@ -231,7 +247,7 @@ make tray     # the tray icon
 service first (`systemctl --user stop ryuod`, or Stop in the tray) and start it again when you are
 done.
 
-`make uninstall` removes the user service and launchers. It keeps the udev rule and
+`make uninstall` removes the user service, launchers and icons. It keeps the udev rule and
 `~/.config/ryuo/state.json`, and prints how to remove them.
 
 | path | contents |
@@ -240,12 +256,12 @@ done.
 | `ryuod.py` | the daemon: device worker, stats sampler, HTTP server and JSON API |
 | `ryuo_display.py` | the second display: virtual monitor, HEVC encoder and stream to the cooler; the daemon runs it while the switch is on |
 | `receiver/` | `RyuoDisplay.java`, the on-device stream receiver, and its built `receiver.jar` |
-| `ryuo_media.py` | video uploads for the daemon: ffprobe check, transcode to HEVC when the panel can't decode the file, adb push |
+| `ryuo_media.py` | uploads for the daemon: ffprobe check, transcode to HEVC when the panel can't decode the file, still images to a 2240×1080 PNG, adb push |
 | `ryuo.py` | the CLI |
 | `ryuo_tray.py` | the tray icon; talks only to the daemon's HTTP API |
 | `web/` | the control page (`index.html`, plain JavaScript, no external requests) and its tests |
 | `tests/` | Python tests |
-| `packaging/` | templates for the systemd unit and the desktop entry |
+| `packaging/` | templates for the systemd unit and the desktop entry; `icons/`, the hicolor icon theme files |
 | `70-rog-ryuo-iv.rules` | the udev rule |
 | `docs/001-lcd-protocol/` | the reverse-engineered HID protocol: frame format, commands, device quirks |
 | `docs/002-stats-prototype/` | daemon design: stat sources, overlay slots, startup and reconnect sequence, HTTP API |

@@ -7,9 +7,10 @@ run. Everything below exists so no test can touch it:
   module is imported, because ryuo_proto.PIDFILE and ryuo_tray.LOCK are computed at import time.
 - The autouse `_safety` fixture re-points every runtime path at the test's tmp_path and wraps
   os.open, open, os.replace, os.remove, os.kill, socket bind/connect and subprocess.Popen. A call
-  that reaches /dev/hidraw*, the real pidfile or state file, port 8746, adb, systemctl, the desktop
-  tools of ryuo_display.py or one of the project scripts raises SafetyViolation and fails the test
-  at teardown, even when the call happened on a worker thread that swallowed the exception.
+  that reaches /dev/hidraw*, the real pidfile, state file, portal token or tray autostart entry, port
+  8746, adb, systemctl, the desktop tools of ryuo_display.py and ryuod or one of the project scripts
+  raises SafetyViolation and fails the test at teardown, even when the call happened on a worker
+  thread that swallowed the exception.
 """
 
 import builtins
@@ -34,13 +35,21 @@ PROTECTED_PATHS = {
         os.path.join(_REAL_CONFIG, "ryuo", "state.json"),
         os.path.join(_REAL_CONFIG, "ryuo", "state.json.tmp"),
         os.path.join(_REAL_CONFIG, "ryuo", "state.json.bad"),
+        # POST /api/display/reset-choice and POST /api/tray {autostart} remove these.
+        os.path.join(_REAL_CONFIG, "ryuo", "display-portal-token"),
+        os.path.join(_REAL_CONFIG, "autostart", "ryuo-tray.desktop"),
+        os.path.join(_REAL_CONFIG, "autostart", "ryuo-tray.desktop.tmp"),
         os.path.join(_REAL_RUNTIME, "ryuo-tray.lock"),
         os.path.join(_REAL_RUNTIME, "ryuod.log"),
     )
 }
 REAL_PORT = 8746
 # The desktop tools ryuo_display.py runs would add a real virtual monitor to the user's desktop.
-FORBIDDEN_PROGRAMS = {"adb", "systemctl", "krfb-virtualmonitor", "kscreen-doctor", "gst-launch-1.0", "pw-link"}
+FORBIDDEN_PROGRAMS = {
+    "adb", "systemctl", "krfb-virtualmonitor", "kscreen-doctor", "gst-launch-1.0", "pw-link",
+    # POST /api/display/open-settings would open a System Settings window on the user's desktop.
+    "kcmshell6", "systemsettings",
+}
 FORBIDDEN_SCRIPTS = ("ryuod.py", "ryuo.py", "ryuo_tray.py", "ryuo_display.py")
 
 # Redirect before any test module imports ryuo_proto (PIDFILE is computed at import time).

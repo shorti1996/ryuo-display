@@ -46,6 +46,10 @@ header h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .06em;
 }
 .pill.ok { border-color: var(--ok-border); background: var(--ok-bg); color: var(--ok-text); }
 .pill.bad { border-color: var(--bad-border); background: var(--bad-bg); color: var(--bad); }
+.panel-sw { gap: 10px; padding: 0 6px 0 14px; font-weight: 400; }
+.panel-sw:disabled { cursor: default; }
+.panel-state { min-width: 56px; text-align: left; font-weight: 600; color: var(--label); }
+.panel-sw[aria-checked="true"] .panel-state { color: var(--ok-text); }
 .dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
 
@@ -95,6 +99,10 @@ input[type=range] { accent-color: var(--accent); min-width: 0; }
 }
 [aria-checked="true"] > .track { background: var(--accent); }
 [aria-checked="true"] > .track::after { left: 23px; }
+.track.sm { width: 40px; height: 24px; }
+.track.sm::after { width: 18px; height: 18px; }
+[aria-checked="true"] > .track.sm::after { left: 19px; }
+button:disabled > .track { opacity: .5; }
 
 /* ---------- hero: the panel, 2240×1080 panel pixels mapped onto the box width ---------- */
 .hero {
@@ -167,9 +175,11 @@ input[type=range] { accent-color: var(--accent); min-width: 0; }
 .mirror-view .chip { font-family: var(--mono); background: rgba(10, 10, 12, .7); }
 /* Where KDE moves and scales the virtual monitor; a caption under the faux windows. */
 .mirror-view .caption {
-  position: absolute; left: 14px; bottom: 12px; max-width: calc(100% - 28px); margin: 0; font-size: 12px; color: var(--muted);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  position: absolute; left: 14px; bottom: 12px; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 28px);
+  margin: 0; font-size: 12px; color: var(--muted);
 }
+.mirror-view .caption span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btn.mini { flex: none; height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; }
 .standby-view {
   position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; padding: 0 8%; background: #030303; font-family: var(--ui); text-align: center;
@@ -277,7 +287,9 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
 .del.armed { background: var(--accent); color: #fff; font-weight: 600; padding: 0 10px; }
 .lock { display: flex; flex: none; margin-right: 8px; color: var(--muted); }
 .tile.preset { padding: 6px; gap: 6px; border-radius: 10px; }
-.tile.preset .thumb { border-radius: 7px; cursor: default; }
+.tile.preset .thumb { border-radius: 7px; }
+.tile.preset div.thumb { cursor: default; }
+.tile.preset .play-ic { width: 28px; height: 28px; }
 .tile.preset .badge { top: 5px; left: 5px; font-size: 10px; padding: 2px 7px; }
 .tile.preset label { display: flex; align-items: center; gap: 6px; min-height: 28px; min-width: 0; font-size: 11px; cursor: pointer; }
 .tile.preset label input { width: 15px; height: 15px; }
@@ -313,10 +325,34 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
 #displayBackground { color: var(--bad); }
 .pointer-row { display: flex; flex-direction: column; gap: 2px; padding-top: 14px; border-top: 1px solid var(--divider); }
 .pointer-row b { font-weight: 500; }
+.pointer-row .kv { min-height: 40px; }
 .req { display: flex; align-items: center; gap: 10px; min-height: 32px; }
 .req svg { flex: none; color: var(--muted); }
 
 /* ---------- app tab ---------- */
+#trayCard { padding: 8px 20px; }
+.set-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 56px; width: 100%; padding: 0;
+  border: 0; border-bottom: 1px solid var(--divider); background: transparent; text-align: left;
+}
+.set-row .lbl { flex-grow: 1; display: flex; flex-direction: column; }
+.set-row select { height: 40px; }
+.steps { display: flex; flex-direction: column; gap: 10px; padding: 14px 0; }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.step {
+  display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 4px 0 12px; border-radius: 999px;
+  background: var(--input); border: 1px solid var(--input-border); font: 13px var(--mono);
+}
+.step button {
+  display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 50%;
+  background: transparent; color: var(--muted);
+}
+.step button:hover:not(:disabled) { color: var(--text); background: var(--seg-on); }
+.step button:disabled { opacity: .35; }
+.add-step { height: 36px; padding: 0 14px; border-radius: 999px; border: 1px dashed #3A3D44; background: transparent; color: var(--text-2); font-size: 13px; }
+.add-step:disabled { opacity: .5; }
+#trayStepNew { width: 80px; height: 36px; }
+.chips .btn { height: 36px; }
 .about { margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .about > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 30px; font-size: 13px; }
 .about dt { color: var(--muted); }
@@ -349,6 +385,10 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
   <button class="pill" id="connPill" type="button" aria-label="Connection details" aria-live="polite">
     <span class="dot" id="dot"></span><span id="conn">connecting…</span><span id="connFw"></span>
   </button>
+  <!-- Hidden for a ryuod without POST /api/panel. -->
+  <button class="pill panel-sw" id="panelSwitch" type="button" role="switch" aria-checked="true" aria-labelledby="panelName panelLabel" hidden>
+    <span id="panelName">Panel</span><span class="panel-state" id="panelLabel">On</span><span class="track sm" aria-hidden="true"></span>
+  </button>
 </header>
 <main>
   <section class="hero" id="hero" aria-label="Panel preview">
@@ -371,12 +411,18 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
       <div class="win" aria-hidden="true" style="left: 8%; top: 14%; width: 46%; height: 60%; background: #181B22; border: 1px solid #2A2E38"></div>
       <div class="win" aria-hidden="true" style="left: 44%; top: 30%; width: 44%; height: 56%; background: #1B1F27; border: 1px solid #2E3340"></div>
       <div class="chip" id="mirrorChip">Desktop mirror · Virtual-RYUO 2240×1080</div>
-      <p class="caption" id="mirrorHint">Position and scale: System Settings → Display &amp; Monitor → Display Configuration → Virtual-RYUO</p>
+      <p class="caption" id="mirrorHint"><span id="mirrorHintText">Position and scale: System Settings → Display &amp; Monitor → Display Configuration → Virtual-RYUO</span><button class="btn mini" id="mirrorSettings" type="button" aria-label="Open Display Configuration" title="Open Display Configuration" hidden>Open</button></p>
     </div>
     <div class="standby-view" id="standbyView" hidden>
       <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7C8088" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>
       <b>ryuod is not answering</b>
       <span>Without ryuod the panel goes to standby after 5 s. <span id="standbyText"></span></span>
+    </div>
+    <div class="standby-view" id="panelOffView" hidden>
+      <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7C8088" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>
+      <b>Panel in standby</b>
+      <span>The cooler shows its standby video. Changes are saved and shown when it turns on.</span>
+      <button class="btn" id="panelTurnOn" type="button">Turn on</button>
     </div>
   </section>
 
@@ -449,7 +495,7 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
         <div id="media"></div>
         <div class="drop" id="dropZone">
           <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C9CBD0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M6 10l6-6 6 6"/><path d="M4 20h16"/></svg>
-          <span>Drop a video to upload it</span>
+          <span>Drop a video or image to upload it</span>
           <div class="row">
             <button class="btn" id="upBrowse" type="button">Browse</button>
             <label for="upFit" class="sr-only">Shape</label>
@@ -458,16 +504,16 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
               <option value="pad">Fit (black bars)</option>
             </select>
           </div>
-          <input type="file" id="upFile" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v" hidden>
+          <input type="file" id="upFile" accept="video/*,image/*,.mp4,.mov,.mkv,.webm,.avi,.m4v,.png,.jpg,.jpeg,.webp,.gif,.bmp" hidden>
           <progress id="upBar" max="1" hidden></progress>
           <button class="btn" id="upCancel" type="button" hidden>Cancel upload</button>
         </div>
       </div>
       <p class="note" id="upStatus" aria-live="polite"></p>
-      <p class="note">Click a thumbnail to preview it above. Ticking or unticking "In playlist" applies at once and restarts the video; the playlist plays in list order. Delete needs a second click and cannot be undone. A video the panel can't play as it is gets converted to 2240×1080 HEVC first, without sound; Shape applies only then. A finished upload plays on a loop.</p>
+      <p class="note">Click a thumbnail to preview it above. Ticking or unticking "In playlist" applies at once and restarts the video; the playlist plays in list order. Delete needs a second click and cannot be undone. A video the panel can't play as it is gets converted to 2240×1080 HEVC first, without sound; a still image always becomes a 2240×1080 PNG. Shape applies to both conversions. A finished upload plays on a loop.</p>
     </div>
     <div class="card stack" style="gap: 14px">
-      <div class="card-head"><h3>Built-in presets</h3><span class="sub">/sdcard/pcMediaPreset, no browser preview</span></div>
+      <div class="card-head"><h3>Built-in presets</h3><span class="sub mono" id="presetSub">/sdcard/pcMediaPreset</span></div>
       <div class="tiles small" id="presets"></div>
     </div>
   </div>
@@ -486,11 +532,13 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
         <p>The stats overlay and background video are hidden while it runs. Brightness still works.</p>
         <p>The panel gets a new frame only when something on the virtual monitor changes. Turning it off removes the virtual monitor, which takes up to about 10 s.</p>
         <p id="displaySettingsHint">To move Virtual-RYUO, use Edit Arrangement in System Settings → Display &amp; Monitor → Display Configuration; its scale is set there too (Plasma may start it at 200 %). Searching "Display Configuration" in KRunner or the app launcher opens that page.</p>
+        <div id="displaySettingsRow" hidden><button class="btn" id="displaySettingsOpen" type="button">Open Display Configuration</button></div>
       </div>
       <div class="pointer-row">
-        <b>Mouse pointer</b>
+        <div class="kv"><b>Mouse pointer</b><button class="btn" id="askAgain" type="button" hidden>Ask again</button></div>
         <p class="note" id="displayPointer" hidden></p>
         <p class="note">To show the pointer, the desktop asks once which screen to share: choose Virtual-RYUO and allow restoring, so later starts skip the question.</p>
+        <p class="note" id="choiceText" hidden></p>
       </div>
     </div>
     <div class="card side-col" style="gap: 10px">
@@ -503,6 +551,20 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
   </div>
 
   <div role="tabpanel" id="tp-app" aria-labelledby="tab-app" class="cols" hidden>
+    <!-- Hidden for a ryuod without POST /api/tray. -->
+    <div class="card main-col" id="trayCard" hidden>
+      <h3 style="margin: 12px 0 4px">Tray</h3>
+      <button class="set-row" id="trayAutostart" type="button" role="switch" aria-checked="false">
+        <span class="lbl"><span>Start with the desktop session</span><span class="note">Starts the tray icon at login (~/.config/autostart/ryuo-tray.desktop)</span></span>
+        <span class="track" aria-hidden="true"></span>
+      </button>
+      <div class="set-row"><label for="trayClick" class="grow">Left-click on the tray icon</label><select id="trayClick"></select></div>
+      <div class="steps">
+        <span id="stepsLabel">Brightness steps in the tray menu</span>
+        <div class="chips" id="traySteps" role="group" aria-labelledby="stepsLabel"></div>
+        <p class="note">In % of the full backlight: 1 to 8 steps, each a whole number from 1 to 100.</p>
+      </div>
+    </div>
     <div class="card stack" style="flex: 1 1 300px; gap: 4px">
       <h3 style="margin-bottom: 8px">Device &amp; connection</h3>
       <dl class="about">
@@ -537,6 +599,7 @@ let catalog = [], config = null, mediaLists = { preset: [], custom: [] }, stats 
 let items = ["", "", "", "", "", ""];
 let unreachable = false;  // the state poll failed last time; fetches made meanwhile failed too
 let device = null;        // device from the last GET /api/state
+let newApi = false;       // ryuod has the panel switch, tray settings and preset previews (state.panel)
 
 async function api(path, body) {
   const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
@@ -565,7 +628,8 @@ function say(text, bad) {
 function showResult(j, what) {
   if (j instanceof Error) { say(`${what}: ${j.message}`, true); return; }
   const sent = (j.sent || []).join(", ");
-  const how = j.heldByDisplay ? "saved; applies when the second display is off"
+  const how = j.heldByStandby ? "saved; applies when the panel turns on"
+    : j.heldByDisplay ? "saved; applies when the second display is off"
     : j.applied === false ? "saved; the cooler is not connected, applied on reconnect"
     : !sent ? "saved" : (j.acked ? "acked by the cooler" : "sent, no ack");
   say(`${what}: ${sent || "nothing sent"} — ${how}${j.restartsVideo ? " (video restarted)" : ""}`);
@@ -692,7 +756,7 @@ function renderPreview() {
 // change any of them; the state poll applies such a change one group at a time.
 const GROUP_FIELDS = {
   overlay: ["items", "statsVisible", "titleColor", "contentColor", "filter"],
-  brightness: ["brightness"],
+  brightness: ["brightness", "brightnessPercent"],
   media: ["media", "playMode"],
   units: ["tempUnit", "memoryMHz", "sensors"],
 };
@@ -701,6 +765,7 @@ const inflight = { overlay: 0, brightness: 0, media: 0, units: 0 };  // POSTs no
 let dragging = null;  // the range input under a pointer drag
 const groupKey = (c, g) => JSON.stringify(GROUP_FIELDS[g].map((k) => c[k]));
 function markSeen(c, ...groups) { for (const g of groups) seen[g] = groupKey(c, g); }
+let pctMode = false;  // the brightness slider is in % (0–100), not on the device scale (0–102)
 const hex = (c) => (c.length === 9 ? "#" + c.slice(3) : c);  // <input type=color> holds #rrggbb only
 const APPLY = {
   overlay(c) {
@@ -709,7 +774,12 @@ const APPLY = {
     $("titleColor").value = hex(c.titleColor); $("contentColor").value = hex(c.contentColor);
     $("filterOn").checked = c.filter.on; $("opacity").value = c.filter.opacity;
   },
-  brightness(c) { $("brightness").value = c.brightness; },
+  brightness(c) {
+    // A ryuod with config.brightnessPercent takes {percent}; an older one only the device scale.
+    pctMode = typeof c.brightnessPercent === "number";
+    $("brightness").max = pctMode ? "100" : "102";
+    $("brightness").value = pctMode ? c.brightnessPercent : c.brightness;
+  },
   media(c) { selected = c.media.slice(); $("playMode").value = c.playMode; },
   units(c) {
     document.querySelectorAll('input[name=unit]').forEach((r) => { r.checked = r.value === c.tempUnit; });
@@ -757,10 +827,11 @@ function syncLabels() {
   $("opacityOut").textContent = $("opacity").value + " %";
   $("opacity").disabled = !$("filterOn").checked;
   document.querySelectorAll("#slots select").forEach((s) => { s.disabled = !$("statsOn").checked; });
-  const b = +$("brightness").value, level = Math.min(255, Math.floor(b * 2.5));
-  $("brightOut").textContent = brightPct(b) + " %";
-  $("brightness").setAttribute("aria-valuetext", brightPct(b) + " %");
-  $("brightness").title = `${b} of 102 on the device scale, backlight ${level}/255`;
+  const b = +$("brightness").value, level = Math.min(255, Math.floor(b * 2.5)), pct = pctMode ? b : brightPct(b);
+  $("brightOut").textContent = pct + " %";
+  $("brightness").setAttribute("aria-valuetext", pct + " %");
+  $("brightness").title = pctMode ? `${b} % of the full backlight`
+    : `${b} of 102 on the device scale, backlight ${level}/255`;
 }
 const sendOverlay = debounce(async () => {
   inflight.overlay++;
@@ -773,11 +844,18 @@ const sendOverlay = debounce(async () => {
   } catch (e) { showResult(e, "Overlay"); } finally { inflight.overlay--; }
 }, 300);
 const sendBrightness = debounce(async () => {
-  const value = +$("brightness").value;
+  const v = +$("brightness").value;
   inflight.brightness++;
   try {
-    const j = await api("/api/brightness", { value });
-    if (config) { config.brightness = value; markSeen(config, "brightness"); }
+    const j = await api("/api/brightness", pctMode ? { percent: v } : { value: v });
+    if (config) {
+      if (pctMode) { config.brightness = j.value ?? config.brightness; config.brightnessPercent = j.percent ?? v; } else config.brightness = v;
+      markSeen(config, "brightness");
+      // Some percentages land 1 % off on the device scale; show what the panel got, unless the slider moved on.
+      if (pctMode && j.percent != null && !sendBrightness.pending() && dragging !== $("brightness")) {
+        $("brightness").value = j.percent; syncLabels();
+      }
+    }
     showResult(j, "Brightness");
   } catch (e) { showResult(e, "Brightness"); } finally { inflight.brightness--; }
 }, 150);
@@ -831,6 +909,17 @@ function playlistBox(name) {
   });
   return cb;
 }
+/** A tile's thumbnail: a button that previews the file in the hero, with its badge. */
+function thumbButton(name, cls) {
+  const th = el("button", cls); th.type = "button";
+  th.title = "Click to preview"; th.setAttribute("aria-label", `Preview ${name} above`);
+  const img = el("img"); img.alt = ""; img.setAttribute("loading", "lazy"); img.src = mediaUrl("thumb", name);
+  // No adb, or ffmpeg could not read the file: the play sign alone instead of a broken image.
+  img.addEventListener("error", () => img.remove());
+  th.append(img); th.insertAdjacentHTML("beforeend", ICON_PLAY); th.append(el("span", "badge"));
+  th.addEventListener("click", () => showPreview(name));
+  return th;
+}
 function renderMedia() {
   disarm();
   const box = $("media"); box.textContent = "";
@@ -838,13 +927,7 @@ function renderMedia() {
   for (const name of mediaLists.custom) {
     const black = name === DISPLAY_BLACK;
     const tile = el("div", "tile"); tile.dataset.name = name;
-    const th = el("button", "thumb" + (black ? " black" : "")); th.type = "button";
-    th.title = "Click to preview"; th.setAttribute("aria-label", `Preview ${name} above`);
-    const img = el("img"); img.alt = ""; img.setAttribute("loading", "lazy"); img.src = mediaUrl("thumb", name);
-    // No adb, or ffmpeg could not read the file: the play sign alone instead of a broken image.
-    img.addEventListener("error", () => img.remove());
-    th.append(img); th.insertAdjacentHTML("beforeend", ICON_PLAY); th.append(el("span", "badge"));
-    th.addEventListener("click", () => showPreview(name));
+    const th = thumbButton(name, black ? "thumb black" : "thumb");
     const top = el("div", "tile-row");
     const label = el("span", "name", name); label.title = name;
     top.append(label);
@@ -865,15 +948,17 @@ function renderMedia() {
     meta.append(el("span", "size", fmtSize(sizes[name])));
     tile.append(th, top, meta); box.append(tile);
   }
-  // Presets live in /sdcard/pcMediaPreset, which mediaDelete, thumb and preview cannot reach.
+  // Presets live in /sdcard/pcMediaPreset, which mediaDelete cannot reach. An older ryuod serves
+  // no thumbnail or preview for them either; their tiles are then placeholders.
   const pre = $("presets"); pre.textContent = "";
+  $("presetSub").textContent = "/sdcard/pcMediaPreset" + (newApi ? "" : ", no browser preview");
   if (!mediaLists.preset.length) pre.append(el("p", "note", "none"));
   mediaLists.preset.forEach((name, i) => {
     const tile = el("div", "tile preset"); tile.dataset.name = name;
     const [a, b] = PRESET_ART[i % PRESET_ART.length];
-    const th = el("div", "thumb");
+    const th = newApi ? thumbButton(name, "thumb") : el("div", "thumb");
     th.style.background = `radial-gradient(ellipse at 30% 40%, ${a} 0%, transparent 60%), radial-gradient(ellipse at 80% 70%, ${b} 0%, transparent 55%), #050506`;
-    th.append(el("span", "badge"));
+    if (!newApi) th.append(el("span", "badge"));
     const l = el("label"); l.title = name;
     l.append(playlistBox(name), el("span", null, name.replace(/^RYUO_IV_/, "").replace(/\.mp4$/i, "")));
     tile.append(th, l); pre.append(tile);
@@ -922,8 +1007,9 @@ async function deleteMedia(name) {
     renderMedia(); renderHero();
     if (j.remaining.length) { say(`Delete: ${j.remaining.join(", ")} is still on the cooler`, true); return; }
     let text = `Deleted ${j.deleted.join(", ")}`;
-    const when = j.heldByDisplay ? ", applies when the second display is off" : j.applied === false ? ", sent when the cooler reconnects" : "";
-    if (j.restartsVideo || j.heldByDisplay) text += `; playlist now ${j.config.media.join(", ")}${when}`;
+    const when = j.heldByStandby ? ", applies when the panel turns on" : j.heldByDisplay ? ", applies when the second display is off"
+      : j.applied === false ? ", sent when the cooler reconnects" : "";
+    if (j.restartsVideo || j.heldByDisplay || j.heldByStandby) text += `; playlist now ${j.config.media.join(", ")}${when}`;
     say(text);
   } catch (e) { showResult(e, "Delete"); renderMedia(); }
 }
@@ -1020,17 +1106,20 @@ async function previewFailed() {
   if (heroName === name) $("heroStatus").textContent = `Preview failed: ${why}`;
 }
 /**
- * What the hero shows, most specific first: a preview the user asked for, ryuod down, the
- * desktop mirror, or the live background (Custom files only; presets have no preview).
+ * What the hero shows, most specific first: ryuod down, a preview the user asked for (also during
+ * standby), the panel in standby, the desktop mirror, or the live background. Presets have a
+ * preview only from a ryuod that serves them.
  */
 function renderHero() {
   const s = lastDisplay;
   const mirror = displayWant || (!!s && s.state === "stopping");
-  const view = previewName && !unreachable ? "preview" : unreachable ? "down" : mirror ? "mirror" : "live";
-  const live = liveName(), liveCustom = !!live && mediaLists.custom.includes(live);
+  const view = unreachable ? "down" : previewName ? "preview" : panelOn === false ? "standby" : mirror ? "mirror" : "live";
+  const live = liveName();
+  const liveCustom = !!live && (mediaLists.custom.includes(live) || (newApi && mediaLists.preset.includes(live)));
   setHeroMedia(view === "preview" ? previewName : view === "live" && liveCustom ? live : null);
   $("hero").dataset.view = view;
   $("standbyView").hidden = view !== "down";
+  $("panelOffView").hidden = view !== "standby";
   $("mirrorView").hidden = view !== "mirror";
   $("previewBar").hidden = view !== "preview";
   $("heroHint").textContent = view !== "live" || liveCustom ? "" : live ? `${live} · built-in preset, no browser preview` : "video plays here";
@@ -1044,7 +1133,8 @@ function renderHero() {
     // The visible label is just "Apply"; the name and tooltip say what it applies.
     $("pvApply").setAttribute("aria-label", `Apply: show ${previewName} on the panel`);
     $("pvApply").title = `Apply: show ${previewName} on the panel`;
-    $("pvNote").textContent = config && config.media.includes(previewName) ? "in the playlist" : "not on the panel yet";
+    $("pvNote").textContent = panelOn === false ? "panel in standby"
+      : config && config.media.includes(previewName) ? "in the playlist" : "not on the panel yet";
   }
   $("mirrorHint").hidden = !!s && s.state !== "on";  // only while the virtual monitor exists
   $("mirrorChip").textContent = "Desktop mirror · " + (!s ? "Virtual-RYUO 2240×1080" : {
@@ -1055,7 +1145,9 @@ function renderHero() {
 
 /* ---------- upload ---------- */
 const UP_ACTIVE = new Set(["receiving", "probing", "converting", "pushing", "starting"]);
-const UP_DONE = { copy: "sent as it was", remux: "repackaged without re-encoding", transcode: "converted" };
+const UP_DONE = {
+  copy: "sent as it was", remux: "repackaged without re-encoding", transcode: "converted", image: "converted to a 2240×1080 PNG",
+};
 let upXhr = null, upCancelled = false, upWatch = null, upActive = false;
 function pct(x) { return Math.round(x * 100) + " %"; }
 function renderUpload(u) {
@@ -1069,15 +1161,18 @@ function renderUpload(u) {
   let text = {
     receiving: `Uploading ${file}${amount}`,
     probing: `Checking ${file}…`,
-    converting: (u.action === "remux" ? "Repackaging as MP4" : `Converting to 2240×1080 HEVC with ${u.encoder}`) + amount + (u.speed ? ` at ${u.speed}` : ""),
+    converting: (u.action === "image" ? "Converting to a 2240×1080 PNG" : u.action === "remux" ? "Repackaging as MP4"
+      : `Converting to 2240×1080 HEVC with ${u.encoder}`) + amount + (u.speed ? ` at ${u.speed}` : ""),
     pushing: "Copying to the cooler over adb…",
     starting: "Starting playback…",
-    done: (u.heldByDisplay ? `Selected ${u.name} (applies when the second display is off)`
+    done: (u.heldByStandby ? `Selected ${u.name} (applies when the panel turns on)`
+      : u.heldByDisplay ? `Selected ${u.name} (applies when the second display is off)`
       : `Playing ${u.name}${u.applied === false ? " once the cooler reconnects" : ""}`) + `, ${UP_DONE[u.action] || u.action}`,
     error: `Upload failed: ${u.error}`,
     cancelled: "Upload cancelled",
   }[u.state] || u.state;
-  if (u.reason && (u.state === "converting" || (u.state === "done" && u.action === "transcode"))) text += `. Reason: ${u.reason}`;
+  // An image's reason only repeats "converted to a PNG".
+  if (u.reason && u.action !== "image" && (u.state === "converting" || (u.state === "done" && u.action === "transcode"))) text += `. Reason: ${u.reason}`;
   $("upStatus").textContent = text;
 }
 function onUploadState(u) {
@@ -1136,12 +1231,24 @@ function displayText(s) {
     default: return s.state;
   }
 }
-/** The three controls bound to the switch: the strip's segments, the tab's switch, the Overlay box. */
-function renderDisplaySwitch(available) {
+// ryuod's 409 reasons; the page disables the control that would get one and shows it as the tooltip.
+const MIRROR_IN_STANDBY = "the panel is in standby; turn it on before the second display";
+const STANDBY_IN_MIRROR = "the panel shows the second display; turn that off before standby";
+/**
+ * The controls bound to the switch: the strip's segments, the tab's switch, the Overlay box, and
+ * the header's panel switch, which the second display and standby each lock out.
+ */
+function renderDisplaySwitch() {
+  const available = !!lastDisplay, blocked = panelOn === false && !displayWant;
   $("modeStats").setAttribute("aria-pressed", displayWant ? "false" : "true");
   $("modeMirror").setAttribute("aria-pressed", displayWant ? "true" : "false");
   $("displaySwitch").setAttribute("aria-checked", displayWant ? "true" : "false");
-  for (const id of ["modeStats", "modeMirror", "displaySwitch"]) $(id).disabled = !available;
+  $("modeStats").disabled = !available;
+  for (const id of ["modeMirror", "displaySwitch"]) {
+    $(id).disabled = !available || blocked;
+    $(id).title = blocked ? MIRROR_IN_STANDBY : "";
+  }
+  renderPanelSwitch();
   // The overlay is hidden on the panel while the desktop shows there.
   $("statsOn").disabled = displayWant;
   $("statsOnLabel").classList.toggle("off", displayWant);
@@ -1152,7 +1259,7 @@ function renderDisplay(s) {
   lastDisplay = s;
   const failed = !!s && (s.state === "retrying" || s.state === "error");
   if (s && !displaySending) displayWant = s.on;
-  renderDisplaySwitch(!!s);
+  renderDisplaySwitch();
   $("displayDot").className = "dot" + (!s ? "" : failed ? " bad" : s.state === "on" ? " ok" : "");
   $("displayText").textContent = s ? displayText(s) : "Not available: this ryuod has no second-display support. Restart it.";
   const p = s && (s.state === "on" || s.state === "starting") ? s.pointer : null;
@@ -1172,15 +1279,164 @@ function renderDisplay(s) {
 }
 async function sendDisplay(on) {
   displaySending = true;
-  displayWant = on; renderDisplaySwitch(true); renderHero();
+  displayWant = on; renderDisplaySwitch(); renderHero();
   try {
     const j = await api("/api/display", { on });
     renderDisplay(j.display);
     say(on ? "Second display: starting" : "Second display: stopping");
   } catch (e) {
-    displayWant = !on; renderDisplaySwitch(true); renderHero();
+    displayWant = !on; renderDisplaySwitch(); renderHero();
     showResult(e, "Second display");
   } finally { displaySending = false; }
+}
+
+/* ---------- panel on / standby ---------- */
+let panelOn = null;          // GET /api/state's panel.on; null for a ryuod without the switch
+let panelSending = false;    // a POST /api/panel is in flight; the poll must not reset the switch
+function renderPanelSwitch() {
+  const sw = $("panelSwitch"), known = panelOn !== null;
+  sw.hidden = !known;
+  if (!known) return;
+  sw.setAttribute("aria-checked", panelOn ? "true" : "false");
+  $("panelLabel").textContent = panelOn ? "On" : "Standby";
+  const blocked = panelOn && displayWant;
+  sw.disabled = blocked || panelSending;
+  sw.title = blocked ? STANDBY_IN_MIRROR : "";
+  $("panelTurnOn").disabled = panelSending;
+}
+function renderPanel(p) {
+  if (!panelSending) panelOn = p ? p.on : null;
+  renderDisplaySwitch(); renderHero();
+}
+async function sendPanel(on) {
+  panelSending = true;
+  panelOn = on; renderDisplaySwitch(); renderHero();
+  try {
+    const j = await api("/api/panel", { on });
+    panelOn = j.panel.on;
+    const what = on ? "on" : "standby";
+    say(!j.changed ? `Panel: already ${on ? "on" : "in standby"}`
+      : j.applied === false ? `Panel: ${what}; the cooler is not connected, applied on reconnect`
+      : `Panel: ${what} — ${j.acked ? "acked by the cooler" : "sent, no ack"}`);
+  } catch (e) {
+    panelOn = !on;
+    showResult(e, "Panel");
+  } finally {
+    panelSending = false;
+    renderDisplaySwitch(); renderHero();
+  }
+}
+
+/* ---------- desktop: screen-share choice, display settings ---------- */
+let desktop = null;          // GET /api/state's desktop; null for a ryuod without it
+let askSending = false;
+function renderDesktop(dk) {
+  desktop = dk || null;
+  $("askAgain").hidden = $("choiceText").hidden = !desktop;
+  const open = !!desktop && !!desktop.displaySettings;
+  $("displaySettingsRow").hidden = $("mirrorSettings").hidden = !open;
+  if (!desktop) return;
+  // ryuod refuses while the second display starts: the dialog may be open, and its answer writes a new choice.
+  const starting = !!lastDisplay && lastDisplay.state === "starting";
+  $("askAgain").disabled = !desktop.portalTokenSaved || starting || askSending;
+  $("askAgain").title = starting ? "the second display is starting; try again once it is on or off" : "";
+  $("choiceText").textContent = desktop.portalTokenSaved
+    ? "A screen-share choice is saved, so starts skip the question. Ask again deletes it."
+    : "No screen-share choice is saved; the next start asks which screen to share.";
+}
+async function askAgain() {
+  askSending = true; renderDesktop(desktop);
+  try {
+    const j = await api("/api/display/reset-choice", {});
+    renderDesktop(j.desktop);
+    say(j.removed ? "Screen-share choice deleted; the next start of the second display asks again"
+      : "No screen-share choice was saved; the next start asks anyway");
+  } catch (e) { showResult(e, "Ask again"); } finally { askSending = false; renderDesktop(desktop); }
+}
+async function openDisplaySettings() {
+  try {
+    const j = await api("/api/display/open-settings", {});
+    say(`Opened Display Configuration (${j.command.join(" ")})`);
+  } catch (e) { showResult(e, "Display Configuration"); }
+}
+
+/* ---------- tray settings ---------- */
+const TRAY_CLICK_LABELS = { page: "Open control page", menu: "Show menu", panel: "Toggle panel on/standby", stats: "Toggle stats overlay" };
+const TRAY_STEPS_MAX = 8;    // ryuod.TRAY_STEPS_MAX: entries in the tray's Brightness submenu
+const ICON_X = '<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+let tray = null;             // GET /api/state's tray as last drawn; null for a ryuod without it
+let traySending = 0;
+let stepAdding = false;      // the "+ Add step" field is open
+function renderTray(t) {
+  tray = t;
+  $("trayCard").hidden = !t;
+  if (!t) return;
+  $("trayAutostart").setAttribute("aria-checked", t.autostart ? "true" : "false");
+  const sel = $("trayClick");
+  const opts = t.leftClickOptions || Object.keys(TRAY_CLICK_LABELS);
+  if ([...sel.options].map((o) => o.value).join() !== opts.join()) {
+    sel.textContent = "";
+    for (const v of opts) sel.append(new Option(TRAY_CLICK_LABELS[v] || v, v));
+  }
+  sel.value = t.leftClick;
+  const box = $("traySteps"); box.textContent = "";
+  for (const v of t.brightnessSteps) {
+    const chip = el("span", "step", `${v} %`);
+    const x = el("button"); x.type = "button"; x.innerHTML = ICON_X;
+    x.setAttribute("aria-label", `Remove ${v} %`);
+    x.disabled = t.brightnessSteps.length <= 1;
+    x.title = x.disabled ? "The tray menu needs at least one step" : `Remove ${v} %`;
+    x.addEventListener("click", () => sendTray({ brightnessSteps: t.brightnessSteps.filter((s) => s !== v) }));
+    chip.append(x); box.append(chip);
+  }
+  if (stepAdding) {
+    const n = el("input"); n.type = "number"; n.id = "trayStepNew"; n.min = "1"; n.max = "100"; n.step = "1";
+    n.setAttribute("aria-label", "New brightness step in %");
+    const add = el("button", "btn", "Add"); add.type = "button"; add.id = "trayStepAdd";
+    const cancel = el("button", "btn", "Cancel"); cancel.type = "button";
+    add.addEventListener("click", () => addStep(n.value));
+    cancel.addEventListener("click", () => { stepAdding = false; renderTray(tray); });
+    n.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addStep(n.value); }
+      if (e.key === "Escape") { stepAdding = false; renderTray(tray); }
+    });
+    box.append(n, add, cancel);
+    if (n.focus) n.focus();
+  } else {
+    const plus = el("button", "add-step", "+ Add step"); plus.type = "button"; plus.id = "trayStepPlus";
+    plus.disabled = t.brightnessSteps.length >= TRAY_STEPS_MAX;
+    plus.title = plus.disabled ? `The tray menu takes at most ${TRAY_STEPS_MAX} steps` : "";
+    plus.addEventListener("click", () => { stepAdding = true; renderTray(tray); });
+    box.append(plus);
+  }
+}
+/** Check a new step as ryuod does (check_steps), so a bad one is refused before it is sent. */
+function addStep(text) {
+  const v = Number(text), steps = tray.brightnessSteps;
+  let why = null;
+  if (!/^\s*\d+\s*$/.test(text) || v < 1 || v > 100) why = "a step must be a whole number from 1 to 100";
+  else if (steps.includes(v)) why = `${v} % is already a step`;
+  else if (steps.length >= TRAY_STEPS_MAX) why = `the tray menu takes at most ${TRAY_STEPS_MAX} steps`;
+  if (why) { showResult(new Error(why), "Tray"); return; }
+  stepAdding = false;
+  sendTray({ brightnessSteps: [...steps, v].sort((a, b) => a - b) });
+}
+async function sendTray(body) {
+  traySending++;
+  try {
+    const j = await api("/api/tray", body);
+    renderTray(j.tray);
+    say("Tray: saved; the tray picks it up within 3 s");
+  } catch (e) {
+    renderTray(tray);  // back to the settings ryuod has
+    showResult(e, "Tray");
+  } finally { traySending--; }
+}
+/** The poll's tray settings, unless the user is changing them. */
+function syncTray(t) {
+  if (!t) { if (tray) renderTray(null); return; }
+  if (traySending || stepAdding || document.activeElement === $("trayClick")) return;
+  if (JSON.stringify(t) !== JSON.stringify(tray)) renderTray(t);
 }
 
 /* ---------- polling ---------- */
@@ -1214,9 +1470,16 @@ async function pollState() {
     $("err").textContent = d.lastError && !d.connected ? d.lastError : "";
     $("errRow").hidden = !$("err").textContent;
     $("connPill").title = $("err").textContent;
+    const hasPanel = "panel" in j;
+    if (newApi !== hasPanel) {
+      // A restarted ryuod of another version: the preset tiles change with it.
+      newApi = hasPanel;
+      if (config) renderMedia();
+    }
     if (!config) applyConfig(j.config); else syncConfig(j.config);
     onUploadState(j.upload);
     renderDisplay(j.display);
+    renderPanel(j.panel); renderDesktop(j.desktop); syncTray(j.tray);
   } catch (e) {
     unreachable = true;
     showDown(e.message);
@@ -1269,6 +1532,13 @@ $("modeStats").addEventListener("click", () => { if (displayWant) sendDisplay(fa
 $("modeMirror").addEventListener("click", () => { if (!displayWant) sendDisplay(true); });
 $("displaySwitch").addEventListener("click", () => sendDisplay(!displayWant));
 $("displayRetry").addEventListener("click", () => sendDisplay(true));
+$("panelSwitch").addEventListener("click", () => sendPanel(!panelOn));
+$("panelTurnOn").addEventListener("click", () => sendPanel(true));
+$("askAgain").addEventListener("click", askAgain);
+$("displaySettingsOpen").addEventListener("click", openDisplaySettings);
+$("mirrorSettings").addEventListener("click", openDisplaySettings);
+$("trayAutostart").addEventListener("click", () => sendTray({ autostart: !tray.autostart }));
+$("trayClick").addEventListener("change", () => sendTray({ leftClick: $("trayClick").value }));
 $("resultClose").addEventListener("click", () => { $("toast").hidden = true; });
 document.querySelectorAll('input[name=unit]').forEach((r) => r.addEventListener("change", () => sendPrefs({ tempUnit: r.value })));
 $("memMHz").addEventListener("change", () => {

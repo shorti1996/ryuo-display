@@ -1,5 +1,6 @@
 """Video files for the RYUO IV panel: probe, transcode when needed, adb push, and thumbnails and
-H.264 proxies so the browser can preview files already on the panel. Used by ryuod.py.
+H.264 proxies so the browser can preview files already on the panel. Still images are converted to a
+full-panel PNG (still_to_png). Used by ryuod.py.
 
 HomeUI plays .mp4 files through Rockchip's rockit framework and the rk_mpp hardware decoder.
 FoxPodZ's decode tests on firmware 1.0.10 (ryuo-iv-screen, PROTOCOL.md "Native resolution works
@@ -57,6 +58,13 @@ class MediaError(Exception):
 
 class Cancelled(Exception):
     pass
+
+
+class StillImage(MediaError):
+    """The file is a single picture (PNG, JPEG, WebP, BMP...), not a video. still_to_png() takes those."""
+
+    def __init__(self):
+        super().__init__("this is a still image; choose a video file")
 
 
 # ---------------------------------------------------------------- binaries
@@ -195,7 +203,7 @@ def video_info(probed):
     fmt = probed.get("format") or {}
     streams = probed.get("streams") or []
     if is_still(fmt.get("format_name", "")):
-        raise MediaError("this is a still image; choose a video file")
+        raise StillImage()
     video = next((s for s in streams if s.get("codec_type") == "video"
                   and not (s.get("disposition") or {}).get("attached_pic")), None)
     if video is None:
@@ -233,7 +241,7 @@ def ffmpeg_info(text):
         last = (text.strip().splitlines() or ["no output"])[-1]
         raise MediaError(f"ffmpeg cannot read this file: {last}")
     if is_still(m.group(1)):
-        raise MediaError("this is a still image; choose a video file")
+        raise StillImage()
     # "Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709), 1920x960 ..."
     v = re.search(r"^\s*Stream #0:\d+\S*: Video: (\w+)[^,\n]*(?:, (\w+))?", text, re.M)
     if v is None:
@@ -375,6 +383,19 @@ def convert(src, dst, info, action, fit, t, on_progress=None, cancel=None):
     run(ffmpeg_args(src, dst, info, action, fit, t), line, cancel, name="ffmpeg")
 
 
+def still_to_png(src, dst, fit, t, cancel=None):
+    """A still image as a PANEL_W x PANEL_H 8-bit RGB PNG, the format of black_png(), which HomeUI
+    shows full screen in its ImageView. The first frame only (an animated WebP keeps one), no
+    metadata; an alpha channel is dropped. Pixels count as square: picture formats rarely say otherwise."""
+    part = dst + ".part"
+    run([t.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", src, "-map", "0:v:0",
+         "-map_metadata", "-1", "-vf", video_filter({"sar": None}, fit), "-frames:v", "1", "-pix_fmt", "rgb24",
+         "-c:v", "png", "-f", "image2", part], cancel=cancel, name="ffmpeg")
+    if not os.path.exists(part) or os.path.getsize(part) == 0:
+        raise MediaError("ffmpeg wrote no image")
+    os.replace(part, dst)
+
+
 # ---------------------------------------------------------------- browser preview
 
 THUMB_W = 320
@@ -418,15 +439,16 @@ def proxy(src, dst, t):
 
 # ---------------------------------------------------------------- device side
 
-def device_name(filename, now=None):
+def device_name(filename, now=None, ext=".mp4"):
     """Name for /sdcard/pcMedia: a millisecond timestamp, like Armoury Crate's uploads, then the
     original stem in [A-Za-z0-9._-]. HomeUI matches names by substring and looks in the preset
-    folder first for names starting with RYUO, so every name starts with its own unique timestamp."""
+    folder first for names starting with RYUO, so every name starts with its own unique timestamp.
+    HomeUI plays a .mp4 as video and shows any other name as a still image."""
     now = time.time() if now is None else now
     stamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(now)) + f"-{int(now * 1000) % 1000:03d}"
     stem = os.path.splitext(os.path.basename(filename or ""))[0]
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip(".-_")[:STEM_MAX].strip(".-_")
-    return f"{stamp}_{stem}.mp4" if stem else f"{stamp}.mp4"
+    return f"{stamp}_{stem}{ext}" if stem else f"{stamp}{ext}"
 
 
 def black_png(width=PANEL_W, height=PANEL_H):

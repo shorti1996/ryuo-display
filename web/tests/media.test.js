@@ -183,11 +183,21 @@ describe("Custom tiles", () => {
     }
     expect(tile(CUSTOM[0]).querySelector(".size").textContent).toBe("98 MB");
     expect(tile(CUSTOM[1]).querySelector(".size").textContent).toBe("735 kB");
+    // Presets get a thumbnail too, but no Delete: mediaDelete cannot reach their folder.
+    for (const name of PRESET) {
+      expect(thumb(name).querySelector("img").getAttribute("src")).toBe(thumbUrl(name));
+      expect(tile(name).querySelector("button.del")).toBeNull();
+    }
+    expect(document.querySelectorAll(".tile button.del")).toHaveLength(CUSTOM.length);
+  });
+
+  it("are placeholders for presets on an older ryuod, which serves no preset thumbnails", async () => {
+    await openPage(makeDaemon({ legacy: true }));
     for (const name of PRESET) {
       expect(tile(name).querySelector("button")).toBeNull();
       expect(tile(name).querySelector("img")).toBeNull();
     }
-    expect(document.querySelectorAll(".tile button.del")).toHaveLength(CUSTOM.length);
+    expect($("presetSub").textContent).toBe("/sdcard/pcMediaPreset, no browser preview");
   });
 
   it("leave the size empty when the daemon has none", async () => {
@@ -425,7 +435,8 @@ describe("preview in the hero", () => {
     thumb(CUSTOM[0]).click();
     $("pvClose").click();
     expect($("previewBar").hidden).toBe(true);
-    expect($("heroVideo").hasAttribute("src")).toBe(false);
+    // Live is the preset RYUO_IV_HW_Info_04.mp4, which the hero now plays instead.
+    expect($("heroVideo").getAttribute("src")).toBe(previewUrl("RYUO_IV_HW_Info_04.mp4"));
     expect($("liveChip").hidden).toBe(false);
     expect($("liveText").textContent).toBe("Live · RYUO_IV_HW_Info_04.mp4");
     expect(badge(CUSTOM[0])).toBe("");
@@ -499,7 +510,7 @@ describe("preview in the hero", () => {
     delButton(CUSTOM[0]).click();
     await tick(0);
     expect($("previewBar").hidden).toBe(true);
-    expect($("heroVideo").hasAttribute("src")).toBe(false);
+    expect($("heroVideo").getAttribute("src")).toBe(previewUrl("RYUO_IV_HW_Info_04.mp4"));
   });
 });
 
@@ -563,9 +574,18 @@ describe("upload drop zone", () => {
     expect(pick).toHaveBeenCalledOnce();
   });
 
-  it("says a video, not an image, is what it takes", async () => {
+  it("takes a video or a still image", async () => {
     await openPage();
-    expect($("dropZone").textContent).toContain("Drop a video to upload it");
-    expect($("upFile").accept).toBe("video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v");
+    expect($("dropZone").textContent).toContain("Drop a video or image to upload it");
+    expect($("upFile").accept).toBe("video/*,image/*,.mp4,.mov,.mkv,.webm,.avi,.m4v,.png,.jpg,.jpeg,.webp,.gif,.bmp");
+  });
+
+  it("shows an image's conversion and result", async () => {
+    const up = { state: "converting", file: "photo.jpg", action: "image", reason: "still image; converted to a 2240x1080 PNG", startedAt: 9, progress: null };
+    const d = await openPage(makeDaemon({ upload: up }));
+    expect($("upStatus").textContent).toBe("Converting to a 2240×1080 PNG…");
+    d.upload = { ...up, state: "done", name: "2026-10-27_12-00-00-000_photo.png", applied: true, acked: true, heldByDisplay: false, heldByStandby: false };
+    await tick(1000);
+    expect($("upStatus").textContent).toBe("Playing 2026-10-27_12-00-00-000_photo.png, converted to a 2240×1080 PNG");
   });
 });

@@ -54,8 +54,15 @@ describe("tabs", () => {
 });
 
 describe("hero", () => {
-  it("shows a preset that plays live as a hint, since presets have no browser preview", async () => {
+  it("plays a preset that plays live, from a ryuod that previews presets", async () => {
     await openPage();
+    expect($("heroVideo").getAttribute("src")).toBe("/api/media/preview?name=RYUO_IV_HW_Info_04.mp4");
+    expect($("heroHint").textContent).toBe("");
+    expect($("liveText").textContent).toBe("Live · RYUO_IV_HW_Info_04.mp4");
+  });
+
+  it("shows a preset that plays live as a hint, from an older ryuod without preset previews", async () => {
+    await openPage(makeDaemon({ legacy: true }));
     expect($("hero").dataset.view).toBe("live");
     expect($("liveChip").hidden).toBe(false);
     expect($("liveDot").className).toBe("dot ok");

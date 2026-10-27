@@ -153,6 +153,17 @@ def test_deleting_the_only_playlist_entry_plays_the_first_preset(api):
         assert json.load(f)["media"] == ["RYUO_IV_HW_Info_01.mp4"]
 
 
+def test_delete_in_standby_saves_the_new_playlist_without_sending_it(api):
+    api.d.state.update({"media": [CUSTOM[0]], "playMode": "Single"})
+    api.d.device.panel_on = False
+    status, _, body = api.delete([CUSTOM[0]])
+    assert status == 200, body
+    assert [c for _, c, _ in api.d.device.sent] == ["mediaDelete", "conn"]  # not held: nothing shows
+    assert body["sent"] == ["POST mediaDelete"]
+    assert (body["heldByStandby"], body["restartsVideo"], body["applied"]) == (True, False, False)
+    assert api.d.state.get()["media"] == ["RYUO_IV_HW_Info_01.mp4"]
+
+
 def test_delete_keeps_the_rest_of_the_playlist_and_its_mode(api):
     api.d.state.update({"media": [CUSTOM[0], PRESET[1], CUSTOM[1]], "playMode": "Cycle"})
     status, _, body = api.delete([CUSTOM[0], CUSTOM[1]])
@@ -414,13 +425,40 @@ def test_range_requests_on_one_keep_alive_connection(api):
 
 # ---------------------------------------------------------------- serving: which files
 
-@pytest.mark.parametrize("name", [PRESET[0], "../pcMediaPreset/" + PRESET[0], "not-on-device.mp4", ""])
-def test_thumb_and_preview_only_serve_custom_files(api, name):
+@pytest.mark.parametrize("name", ["../pcMediaPreset/" + PRESET[0], "../pcMedia/" + CUSTOM[1], "not-on-device.mp4",
+                                  "RYUO_IV_HW_Info_03.mp4", "", "..", "preset\\" + PRESET[0]])
+def test_thumb_and_preview_only_serve_listed_files(api, name):
     for kind in ("thumb", "preview"):
         status, _, body = api.request("GET", f"/api/media/{kind}?name={name}")
         assert status == 404
         assert body["ok"] is False
     assert api.adb_log() == []
+
+
+def test_presets_are_pulled_from_the_preset_folder(api):
+    name = "RYUO_IV_still.png"
+    (api.d.adb_root / "device/sdcard/pcMediaPreset" / name).write_bytes(b"preset png")
+    api.d.device.media["preset"] = [*PRESET, name]
+    for kind in ("thumb", "preview", "thumb"):
+        status, r, body = api.request("GET", f"/api/media/{kind}?name={name}")
+        assert (status, body, r.getheader("Content-Type")) == (200, b"preset png", "image/png")
+    entry = api.d.adb_root.parent / "preview" / ("preset\\" + name)
+    assert [x for x in api.adb_log() if x.startswith("pull")] == [
+        f"pull {ryuod.PRESET_DIR}{name} {entry / 'source.png.part'}"]
+
+
+def test_a_name_in_both_folders_is_served_from_where_homeui_plays_it(api):
+    """getMediaFilePath: names starting with RYUO come from the preset folder first, others from pcMedia."""
+    media = {"preset": ["RYUO_a.png", "b.png", "c.png"], "custom": ["RYUO_a.png", "b.png", "d.png"]}
+    assert ryuod.media_folder(media, "RYUO_a.png") == ryuod.PRESET_DIR
+    assert ryuod.media_folder(media, "b.png") == P.MEDIA_DIR
+    assert ryuod.media_folder(media, "c.png") == ryuod.PRESET_DIR
+    assert ryuod.media_folder(media, "d.png") == P.MEDIA_DIR
+    assert ryuod.media_folder(media, "e.png") is None
+    for folder, data in (("pcMedia", b"custom"), ("pcMediaPreset", b"preset")):
+        (api.d.adb_root / "device/sdcard" / folder / "b.png").write_bytes(data)
+    api.d.device.media.update(media)
+    assert api.request("GET", "/api/media/thumb?name=b.png")[2] == b"custom"
 
 
 def test_other_sites_cannot_load_previews(api):
@@ -576,6 +614,17 @@ def test_thumbnails_for_hevc_h264_and_png(api, clips, tools):
             assert r.getheader("Content-Type") == "image/jpeg"
             assert jpeg_size(body) == (M.THUMB_W, 154 if clip == "hevc.mp4" else 160)
     assert M.tools().ffprobe == (None if tools == "imageio" else FFPROBE)
+
+
+def test_preset_video_thumbnail_and_preview(api, clips, tools):
+    shutil.copyfile(clips / "h264.mp4", api.d.adb_root / "device/sdcard/pcMediaPreset" / PRESET[0])
+    status, r, body = api.request("GET", f"/api/media/thumb?name={PRESET[0]}")
+    assert (status, r.getheader("Content-Type")) == (200, "image/jpeg"), body
+    assert jpeg_size(body) == (M.THUMB_W, 160)
+    status, r, body = api.request("GET", f"/api/media/preview?name={PRESET[0]}")
+    assert (status, r.getheader("Content-Type")) == (200, "video/mp4")
+    assert body == (clips / "h264.mp4").read_bytes()  # H.264 goes to the browser as it is
+    assert len([x for x in api.adb_log() if x.startswith("pull")]) == 1
 
 
 def probe(data, tmp_path):

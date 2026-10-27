@@ -24,7 +24,7 @@ the backend API. Keep every existing feature; only layout, wording and controls 
 
 ## Layout (top → bottom), max-width 1180px centred
 1. **Header**: "RYUO IV LCD" · spacer · Connected pill (click → App tab) ·
-   **Panel switch** (On / Standby) = existing "Stop (panel goes to standby)".
+   **Panel switch** (On / Standby) = `POST /api/panel`, the tray's "Panel on" (not "Stop ryuod").
 2. **Hero preview**: 2240:1080 box, `container-type: inline-size`; overlay font sizes in `cqw`.
    - Background = the media playing on the panel (the app already can play these files in the
      browser). Placeholder when nothing: radial-gradient(ellipse at 30% 40%, #2a1015 0%,

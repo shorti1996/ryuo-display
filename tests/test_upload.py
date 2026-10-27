@@ -5,6 +5,7 @@ import http.client
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import textwrap
@@ -158,6 +159,64 @@ def test_16_9_h264_is_transcoded_to_full_panel_hevc(daemon, tmp_path):
         capture_output=True, text=True, check=True).stdout))
     assert (info["codec"], info["tag"], info["width"], info["height"], info["pix_fmt"]) == \
         ("hevc", "hvc1", 2240, 1080, "yuv420p")
+
+
+def png_header(data):
+    """(width, height, bit depth, colour type) from a PNG's IHDR."""
+    assert data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR"
+    return struct.unpack(">IIBB", data[16:26])
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(("source", "args"), [
+    ("photo.jpg", []),
+    ("shot.png", []),
+    ("pic.webp", ["-c:v", "libwebp"]),
+])
+def test_still_image_becomes_a_full_panel_png_and_is_shown(daemon, tmp_path, source, args):
+    if source.endswith(".webp") and "libwebp" not in subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True).stdout:
+        pytest.skip("ffmpeg without libwebp")
+    data = make_clip(tmp_path / source, "800x600", 1, "-frames:v", "1", *args)
+    status, j = upload(daemon, data, source, fit="pad")
+    assert status == 202, j
+    u = wait_done(daemon)
+    assert (u["state"], u["action"], u["encoder"]) == ("done", "image", None), u
+    assert u["reason"] == "still image; converted to a 2240x1080 PNG"
+    assert (u["applied"], u["acked"], u["heldByStandby"]) == (True, True, False)
+    name = u["name"]
+    assert name.endswith(f"_{source.rsplit('.', 1)[0]}.png")
+    pushed = (daemon.adb_root / "device/sdcard/pcMedia" / name).read_bytes()
+    # The format of display-black.png, which HomeUI is known to show.
+    assert png_header(pushed) == png_header(M.black_png()) == (2240, 1080, 8, 2)
+    method, cmd, cfg = daemon.device.sent[-1]
+    assert (method, cmd, cfg["media"], cfg["playMode"]) == ("POST", "waterBlockScreenId", [name], "Single")
+    assert name in daemon.device.media["custom"]
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(("fit", "corner"), [("pad", (0, 0, 0)), ("crop", None)])
+def test_still_image_fit(daemon, tmp_path, fit, corner):
+    # A white 4:3 picture: padded, the panel's corner is a black bar; cropped, it is white.
+    data = make_clip(tmp_path / "white.png", "800x600", 1, "-frames:v", "1", "-vf", "lutrgb=r=255:g=255:b=255")
+    assert upload(daemon, data, "white.png", fit=fit)[0] == 202
+    u = wait_done(daemon)
+    assert u["state"] == "done", u
+    pushed = daemon.adb_root / "device/sdcard/pcMedia" / u["name"]
+    rgb = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(pushed), "-vf", "crop=1:1:0:0",
+                          "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+    assert tuple(rgb) == (corner or (255, 255, 255))
+
+
+@needs_ffmpeg
+def test_still_image_in_standby_is_saved_without_sending(daemon, tmp_path):
+    daemon.device.panel_on = False
+    data = make_clip(tmp_path / "shot.png", "640x320", 1, "-frames:v", "1")
+    assert upload(daemon, data, "shot.png")[0] == 202
+    u = wait_done(daemon)
+    assert (u["state"], u["applied"], u["heldByStandby"]) == ("done", False, True), u
+    assert daemon.device.sent == []
+    assert daemon.state.get()["media"] == [u["name"]]
 
 
 @needs_ffmpeg

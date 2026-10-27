@@ -4,12 +4,14 @@
 Control page and JSON API on http://127.0.0.1:8746/. One device worker thread owns the
 hidraw fd: it runs the startup sequence, sends a PcInfo heartbeat every second (HomeUI
 drops to standby after 5 s of silence) and reconnects after USB loss, suspend, or a
-HomeUI restart. Settings persist in ~/.config/ryuo/state.json. A video uploaded through the
+HomeUI restart. The panel switch sends HomeUI to its standby video while that heartbeat goes on.
+Settings persist in ~/.config/ryuo/state.json, the tray's included. A video uploaded through the
 page is converted on an upload thread when the panel cannot play it as it is (ryuo_media.py),
-pushed with adb and played. Files in /sdcard/pcMedia can be deleted from the page, and previewed
-there from copies pulled with adb: a thumbnail, and an H.264 proxy for the HEVC files Chrome
-cannot decode. While the second-display switch is on, ryuo_display.py runs as a child process and
-shows a virtual monitor of the desktop on the panel, with HomeUI on a black still image under it.
+pushed with adb and played; a still image becomes a full-panel PNG. Files in /sdcard/pcMedia can
+be deleted from the page, and they and the presets previewed there from copies pulled with adb: a
+thumbnail, and an H.264 proxy for the HEVC files Chrome cannot decode. While the second-display
+switch is on, ryuo_display.py runs as a child process and shows a virtual monitor of the desktop
+on the panel, with HomeUI on a black still image under it.
 """
 import argparse
 import collections
@@ -36,6 +38,7 @@ import urllib.parse
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
+import ryuo_display as D  # noqa: E402  (for the portal token's path only; it runs as a child process)
 import ryuo_media as M  # noqa: E402
 import ryuo_proto as P  # noqa: E402
 
@@ -48,7 +51,13 @@ UPLOAD_IDLE_S = 60          # an upload that sends nothing for this long is drop
 PREVIEW_CAP = 500 * 2**20   # bytes of pulled files, thumbnails and proxies kept under the cache dir
 MAX_MEDIA = 20
 MAX_DELETE = 100            # names in one POST /api/media/delete
-IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+               ".gif": "image/gif", ".bmp": "image/bmp"}
+PRESET_DIR = "/sdcard/pcMediaPreset/"
+# The tray's left-click action: open the control page, show its menu, or toggle panel standby or the stats.
+TRAY_CLICKS = ("page", "menu", "panel", "stats")
+TRAY_STEPS_MAX = 8  # entries in the tray's Brightness submenu
+DISPLAY_SETTINGS = (["kcmshell6", "kcm_kscreen"], ["systemsettings", "kcm_kscreen"])  # first one on PATH
 # What HomeUI shows under the second display (class Backdrop). HomeUI plays a .mp4 name as video
 # and any other name as a still image.
 BLACK_NAME = "display-black.png"
@@ -62,6 +71,8 @@ DEFAULT_STATE = {
     "items": DEFAULT_ITEMS, "statsVisible": True, "titleColor": "#E5252B", "contentColor": "#FFFFFF",
     "filter": {"on": False, "opacity": 100}, "brightness": 100, "tempUnit": "Celsius",
     "memoryMHz": 0, "sensors": {"motherboard": "auto"}, "secondDisplay": False,
+    # brightnessSteps: % of the 255 backlight levels, as the page shows brightness.
+    "tray": {"leftClick": "page", "brightnessSteps": [25, 50, 75, 100]},
 }
 TEMP_ITEMS = {"CPU Temperature", "GPU Temperature", "Hard Disk Temperature", "Motherboard Temperature"}
 # (item, source key, note) for the custom labels; the unit slot always reads RPM.
@@ -177,6 +188,42 @@ def check_filter(v, cur):
     return out
 
 
+def check_steps(v):
+    """The tray's brightness steps, sorted: 1 to TRAY_STEPS_MAX distinct integers, 1-100 %."""
+    if not isinstance(v, list) or not 1 <= len(v) <= TRAY_STEPS_MAX:
+        raise Invalid(f"brightnessSteps must be a list of 1-{TRAY_STEPS_MAX} integers 1-100")
+    steps = [check_int(x, "each brightness step", 1, 100) for x in v]
+    if len(set(steps)) != len(steps):
+        raise Invalid("brightnessSteps has the same value twice")
+    return sorted(steps)
+
+
+def check_tray(v, cur):
+    """Tray settings {leftClick, brightnessSteps}, merged over cur; keys left out stay as they are."""
+    if not isinstance(v, dict):
+        raise Invalid("tray must be an object {leftClick, brightnessSteps}")
+    out = dict(cur)
+    if "leftClick" in v:
+        if v["leftClick"] not in TRAY_CLICKS:
+            raise Invalid(f"leftClick must be one of {', '.join(TRAY_CLICKS)}")
+        out["leftClick"] = v["leftClick"]
+    if "brightnessSteps" in v:
+        out["brightnessSteps"] = check_steps(v["brightnessSteps"])
+    return out
+
+
+def brightness_percent(value):
+    """A brightness on the device scale (0-102) as the share of the 255 backlight levels it gives.
+    HomeUI sets the backlight to (int)(value * 2.5), so 100 gives 250/255 = 98 % and 102 gives 100 %."""
+    return round(min(255, int(value * 2.5)) * 100 / 255)
+
+
+def brightness_value(percent):
+    """The device-scale brightness for a percentage (0-100). The 103 device values give 92 distinct
+    percentages; brightness_percent() maps those back exactly, and the others to 1 % off."""
+    return min(P.BRIGHTNESS_MAX, round(percent * 255 / 250))
+
+
 # ---------------------------------------------------------------- state
 
 def default_state_path():
@@ -225,6 +272,7 @@ class State:
             "sensors": lambda v: {"motherboard": v.get("motherboard")}
             if isinstance(v, dict) and isinstance(v.get("motherboard"), str) else None,
             "secondDisplay": lambda v: v if isinstance(v, bool) else None,
+            "tray": lambda v: check_tray(v, d["tray"]),
         }
         for key, fn in loaders.items():
             if key in raw:
@@ -257,9 +305,11 @@ class State:
 
 
 def public_config(st):
-    return {k: st[k] for k in ("media", "playMode", "ratio", "items", "statsVisible", "titleColor",
-                               "contentColor", "filter", "brightness", "tempUnit", "memoryMHz", "sensors",
-                               "secondDisplay")}
+    out = {k: st[k] for k in ("media", "playMode", "ratio", "items", "statsVisible", "titleColor",
+                              "contentColor", "filter", "brightness", "tempUnit", "memoryMHz", "sensors",
+                              "secondDisplay")}
+    out["brightnessPercent"] = brightness_percent(st["brightness"])
+    return out
 
 
 def shown_items(st):
@@ -594,6 +644,13 @@ def panel_text(item, value, temp_unit):
 
 # ---------------------------------------------------------------- device worker
 
+# Commands that would show on the panel. While it is in standby they are saved, not sent (Device.submit):
+# brightness would light the standby video, preset would draw the stats over it, and a config would
+# restart a video nobody sees. Device.show() sends them all when the panel comes back.
+HELD_IN_STANDBY = {"brightness", "preset", "waterBlockScreenId"}
+PANEL = "PANEL"  # Job.method of a panel switch; run_job runs a sequence instead of one command
+
+
 class Job:
     def __init__(self, method, cmd, body, wait=0.25):
         self.method, self.cmd, self.body, self.wait = method, cmd, body, wait
@@ -633,6 +690,9 @@ class Device(threading.Thread):
         self.pending = {}
         self.last_seq = 0
         self.backdrop = None        # Backdrop; while its switch is on, startup sends BLACK_NAME
+        # False: the panel switch is on standby. HomeUI shows its standby video after POST disconn
+        # while the heartbeat goes on (set_panel). In memory only: ryuod starts with the panel on.
+        self.panel_on = True
 
     # -- called from HTTP threads
 
@@ -640,6 +700,8 @@ class Device(threading.Thread):
         with self.lock:
             if self.dev is None:
                 return None
+            if (held := self.held(cmd)) is not None:
+                return held
             last = self.jobs[-1] if self.jobs else None
             if cmd == "preset" and last is not None and last.cmd == "preset":
                 # Consecutive presets collapse into the newest; every waiter gets its result.
@@ -652,6 +714,31 @@ class Device(threading.Thread):
                 fut = job.futures[0]
         os.write(self.wake_w, b"x")
         return fut
+
+    def held(self, cmd):
+        """While the panel is in standby: a resolved Future for a cmd in HELD_IN_STANDBY, which is
+        then not sent. None otherwise. Call with self.lock held."""
+        if self.panel_on or cmd not in HELD_IN_STANDBY:
+            return None
+        fut = concurrent.futures.Future()
+        fut.set_result({"applied": False, "acked": False, "heldByStandby": True})
+        return fut
+
+    def set_panel(self, on):
+        """Switch the panel on or to standby. Returns (Future or None, changed). The Future is None
+        when nothing is sent: the switch is already there, or the cooler is disconnected, in which
+        case the startup sequence follows the switch on reconnect."""
+        with self.lock:
+            if on == self.panel_on:
+                return None, False
+            # Set before the job is queued, so every later submit() of a held command sees it.
+            self.panel_on = on
+            if self.dev is None:
+                return None, True
+            job = Job(PANEL, "on" if on else "standby", None)
+            self.jobs.append(job)
+        os.write(self.wake_w, b"x")
+        return job.futures[0], True
 
     def stop(self, send_disconn):
         self.send_disconn = send_disconn
@@ -760,6 +847,20 @@ class Device(threading.Thread):
         if not st["media"]:
             st = self.state.update({"media": self.first_preset()})
         self.call("POST", "temperature", {"value": st["tempUnit"]}, wait=0.3)
+        if self.panel_on:
+            self.show(st)
+        else:
+            # HomeUI may have left its standby on this conn (after its own 5 s timeout); back to it.
+            self.call("POST", "disconn", None, wait=0.3)
+        self.ready = True
+        self.missed, self.hb_pending = 0, None
+        self.next_hb = 0.0
+        self.heartbeat()
+
+    def show(self, st):
+        """The startup steps that put the saved media, stats and brightness on the panel and take
+        HomeUI out of standby. Also the way back from the panel switch's standby. Returns whether
+        HomeUI acked `power resume`."""
         # isBlockScreen gates brightness; without this the brightness step is ignored
         self.call("POST", "waterBlockScreen", {"enable": True}, wait=0.3)
         cfg, dropped = fitted_config(st)
@@ -777,13 +878,10 @@ class Device(threading.Thread):
             log(f"device: {e}; config not sent")
             self.last_error = str(e)
         # HomeUI only leaves standby on its own after a 5 s silence; "resume" hides it at once.
-        self.call("POST", "power", {"event": "resume"}, wait=0.3)
+        resumed, _ = self.call("POST", "power", {"event": "resume"}, wait=0.3)
         # Steps above restore the brightness HomeUI saved in standby (50/255); set ours last.
         self.call("POST", "brightness", {"value": st["brightness"]}, wait=0.3)
-        self.ready = True
-        self.missed, self.hb_pending = 0, None
-        self.next_hb = 0.0
-        self.heartbeat()
+        return resumed
 
     def first_preset(self):
         """The playlist for an empty one: the first preset by name."""
@@ -888,6 +986,16 @@ class Device(threading.Thread):
     def run_job(self, job):
         result = {"applied": True, "acked": False}
         try:
+            if job.method == PANEL:
+                # Standby: HomeUI shows its standby video, as when ryuod stops, and stays there while the
+                # heartbeat goes on: it leaves only on `power resume` or after a 5 s silence.
+                if job.cmd == "standby":
+                    result["acked"], _ = self.call("POST", "disconn", None, wait=0.3)
+                else:
+                    result["acked"] = self.show(self.state.get())
+                for f in job.futures:
+                    f.set_result(result)
+                return
             acked, body = self.call(job.method, job.cmd, job.body, job.wait)
             result["acked"] = acked
             if job.cmd == "conn":
@@ -1287,6 +1395,54 @@ class Backdrop:
             return self.d.device.submit("POST", "waterBlockScreenId", cfg, wait), False
 
 
+# ---------------------------------------------------------------- desktop: tray autostart, portal token, display settings
+
+TRAY_LAUNCHER = os.path.join(HERE, "packaging", "ryuo-tray.desktop")
+
+
+def autostart_path():
+    """The XDG autostart entry `make install` adds, which starts the tray at login."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "autostart", "ryuo-tray.desktop")
+
+
+def set_autostart(on):
+    """Write or remove the autostart entry. It is written as `make install` writes it: the
+    launcher in packaging/ with @APPDIR@ replaced by this checkout. Raises OSError."""
+    path = autostart_path()
+    if not on:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(path)
+        return
+    with open(TRAY_LAUNCHER) as f:
+        text = f.read().replace("@APPDIR@", HERE)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def tray_status(tray):
+    """GET /api/state's "tray": the saved settings, whether the autostart entry exists, and the
+    device-scale value of each brightness step, which the tray compares with config.brightness."""
+    return {"autostart": os.path.exists(autostart_path()), **tray,
+            "brightnessStepValues": [brightness_value(s) for s in tray["brightnessSteps"]],
+            "leftClickOptions": list(TRAY_CLICKS)}
+
+
+def display_settings_cmd():
+    """The command that opens Plasma's Display Configuration, or None when neither program is installed."""
+    return next((cmd for cmd in DISPLAY_SETTINGS if shutil.which(cmd[0])), None)
+
+
+def desktop_status():
+    """GET /api/state's "desktop": the portal token ryuo_display.py keeps, and the display-settings program."""
+    cmd = display_settings_cmd()
+    return {"portalTokenSaved": os.path.exists(D.token_path()), "displaySettings": cmd[0] if cmd else None}
+
+
 # ---------------------------------------------------------------- HTTP
 
 def adb_media():
@@ -1487,10 +1643,14 @@ def delete_media(d, names):
             last = {"applied": False, "acked": False}
             if fut is not None:
                 last = job_result(fut) or {"applied": True, "acked": False}
-            sent.append("POST waterBlockScreenId")
+            if last.get("heldByStandby"):
+                restarts = False  # saved; it plays when the panel comes back on
+            else:
+                sent.append("POST waterBlockScreenId")
     return {"deleted": deleted, "remaining": left, "listedBy": listed, "sent": sent,
             "applied": last.get("applied", False), "acked": last.get("acked", False), "restartsVideo": restarts,
-            "heldByDisplay": held, "config": public_config(st), "media": dict(dev.media)}
+            "heldByDisplay": held, "heldByStandby": bool(last.get("heldByStandby")), "config": public_config(st),
+            "media": dict(dev.media)}
 
 
 # ---------------------------------------------------------------- video upload
@@ -1503,7 +1663,8 @@ def default_upload_dir():
 
 class Upload(threading.Thread):
     """One uploaded video on its way to the panel: received, probed, converted if the panel
-    cannot play it as it is, pushed with adb and played as a single looping clip.
+    cannot play it as it is, pushed with adb and played as a single looping clip. A still image
+    is always converted, to a full-panel PNG (action "image"), and shown the same way.
 
     Runs on its own thread, apart from the device worker; it only queues the final
     waterBlockScreenId, so the heartbeat keeps going during a long transcode."""
@@ -1520,7 +1681,8 @@ class Upload(threading.Thread):
         self.status = {"state": "receiving", "file": os.path.basename(filename) or None, "bytes": length,
                        "received": 0, "progress": 0.0, "speed": None, "action": None, "reason": None,
                        "encoder": None, "name": None, "error": None, "applied": None, "acked": None,
-                       "heldByDisplay": None, "startedAt": int(time.time() * 1000), "finishedAt": None}
+                       "heldByDisplay": None, "heldByStandby": None, "startedAt": int(time.time() * 1000),
+                       "finishedAt": None}
 
     def snapshot(self):
         with self.lock:
@@ -1572,19 +1734,30 @@ class Upload(threading.Thread):
     def process(self):
         self.set(state="probing", progress=None)
         t = M.tools()
-        info = M.inspect(self.src, t)
-        action, reason = M.plan(info)
-        self.set(action=action, reason=reason, encoder=t.encoder if action == "transcode" else None)
-        log(f"upload: {self.status['file']}: {action} ({reason})")
-        out = self.src
-        if action != "copy":
-            out = os.path.join(self.dir, "panel.mp4")
-            self.set(state="converting", progress=0.0 if info["duration"] else None)
-            M.convert(self.src, out, info, action, self.fit, t,
-                      lambda done, speed: self.set(progress=done, speed=speed), self.cancel_)
+        ext = ".mp4"
+        try:
+            info = M.inspect(self.src, t)
+        except M.StillImage:
+            # HomeUI shows a still under any name but .mp4, as it does BLACK_NAME.
+            action, reason, ext = "image", f"still image; converted to a {M.PANEL_W}x{M.PANEL_H} PNG", ".png"
+            self.set(action=action, reason=reason, encoder=None)
+            log(f"upload: {self.status['file']}: {action} ({reason})")
+            out = os.path.join(self.dir, "panel.png")
+            self.set(state="converting", progress=None)
+            M.still_to_png(self.src, out, self.fit, t, self.cancel_)
+        else:
+            action, reason = M.plan(info)
+            self.set(action=action, reason=reason, encoder=t.encoder if action == "transcode" else None)
+            log(f"upload: {self.status['file']}: {action} ({reason})")
+            out = self.src
+            if action != "copy":
+                out = os.path.join(self.dir, "panel.mp4")
+                self.set(state="converting", progress=0.0 if info["duration"] else None)
+                M.convert(self.src, out, info, action, self.fit, t,
+                          lambda done, speed: self.set(progress=done, speed=speed), self.cancel_)
         if self.cancel_.is_set():
             raise M.Cancelled()
-        name = M.device_name(self.status["file"])
+        name = M.device_name(self.status["file"], ext=ext)
         self.set(state="pushing", progress=None, speed=None, name=name)
         M.push(out, name, P.MEDIA_DIR, self.cancel_)
         dev = self.d.device
@@ -1600,11 +1773,22 @@ class Upload(threading.Thread):
                 res = fut.result(3)
             except concurrent.futures.TimeoutError:
                 res = {"applied": True, "acked": False}
-        self.set(state="done", applied=res.get("applied"), acked=res.get("acked"), heldByDisplay=held)
+        self.set(state="done", applied=res.get("applied"), acked=res.get("acked"), heldByDisplay=held,
+                 heldByStandby=bool(res.get("heldByStandby")))
         log(f"upload: selected {name}; plays when the second display stops" if held else f"upload: playing {name}")
 
 
 # ---------------------------------------------------------------- previews of device media
+
+def media_folder(media, name):
+    """The device folder HomeUI plays `name` from, by the media lists: getMediaFilePath looks in the
+    preset folder first for names starting with RYUO, else in /sdcard/pcMedia first. None when
+    neither list has it."""
+    preset, custom = name in media["preset"], name in media["custom"]
+    if preset and (name.startswith("RYUO") or not custom):
+        return PRESET_DIR
+    return P.MEDIA_DIR if custom else None
+
 
 def default_preview_dir():
     base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
@@ -1634,50 +1818,60 @@ def media_ext(name):
 
 
 class Previews:
-    """Thumbnails and browser-playable copies of the files in /sdcard/pcMedia.
+    """Thumbnails and browser-playable copies of the files in /sdcard/pcMedia and the presets in
+    /sdcard/pcMediaPreset.
 
     A file is pulled with adb once, into its own directory under ~/.cache/ryuo/preview/, and the
     thumbnail and proxy are made from that copy. The work runs on the HTTP thread that asked for
     it, and adb and ffmpeg run at nice 10 (ryuo_media.run), so a 98 MB pull plus a proxy encode
     (about 6 s) does not hold up the device worker or its heartbeat. The directory is emptied at
-    startup; past PREVIEW_CAP bytes the least recently used entries are removed."""
+    startup; past PREVIEW_CAP bytes the least recently used entries are removed.
+
+    An entry is named by key(): the file name for /sdcard/pcMedia, PRESET_KEY + name for a preset."""
+
+    PRESET_KEY = "preset\\"  # bare_name() refuses a backslash, so no custom file's entry has this name
 
     def __init__(self, root, cap=PREVIEW_CAP):
         self.root, self.cap = root, cap
         self.lock = threading.Lock()
-        self.locks = {}                     # name -> Lock, held while that entry is pulled or made
+        self.locks = {}                     # key -> Lock, held while that entry is pulled or made
         self.pull_lock = threading.Lock()   # one adb transfer at a time
-        self.direct = {}                    # name -> True when the browser plays the pulled file
+        self.direct = {}                    # key -> True when the browser plays the pulled file
 
-    def entry(self, name):
+    @classmethod
+    def key(cls, name, folder):
+        return name if folder == P.MEDIA_DIR else cls.PRESET_KEY + name
+
+    def entry(self, key):
         with self.lock:
-            return self.locks.setdefault(name, threading.Lock())
+            return self.locks.setdefault(key, threading.Lock())
 
-    def source(self, name, size):
+    def source(self, name, size, folder=P.MEDIA_DIR):
         """The pulled copy of a device file. Pulled again when the panel's copy has another size."""
-        d = os.path.join(self.root, name)
+        key = self.key(name, folder)
+        d = os.path.join(self.root, key)
         src = os.path.join(d, "source" + media_ext(name))
         if os.path.exists(src) and size in (None, os.path.getsize(src)):
             os.utime(d)  # the directory's mtime orders the entries for trim()
             return src
         shutil.rmtree(d, ignore_errors=True)
-        self.direct.pop(name, None)
+        self.direct.pop(key, None)
         os.makedirs(d)
         try:
             with self.pull_lock:
-                M.run([*M.ADB, "pull", P.MEDIA_DIR + name, src + ".part"], name="adb pull")
+                M.run([*M.ADB, "pull", folder + name, src + ".part"], name="adb pull")
             os.replace(src + ".part", src)
         except BaseException:
             shutil.rmtree(d, ignore_errors=True)
             raise
-        self.trim(keep=name)
+        self.trim(keep=key)
         return src
 
-    def thumb(self, name, size):
+    def thumb(self, name, size, folder=P.MEDIA_DIR):
         """(path, Content-Type) of the thumbnail. An image file is its own thumbnail."""
         ext = media_ext(name)
-        with self.entry(name):
-            src = self.source(name, size)
+        with self.entry(self.key(name, folder)):
+            src = self.source(name, size, folder)
             if ext in IMAGE_TYPES:
                 return src, IMAGE_TYPES[ext]
             out = os.path.join(os.path.dirname(src), "thumb.jpg")
@@ -1685,22 +1879,23 @@ class Previews:
                 M.thumbnail(src, out, M.tools())
             return out, "image/jpeg"
 
-    def preview(self, name, size):
+    def preview(self, name, size, folder=P.MEDIA_DIR):
         """(path, Content-Type) of something the browser shows: the pulled file for H.264 and
         images, else an H.264 proxy (ryuo_media.PROXY_W px wide)."""
         ext = media_ext(name)
-        with self.entry(name):
-            src = self.source(name, size)
+        key = self.key(name, folder)
+        with self.entry(key):
+            src = self.source(name, size, folder)
             if ext in IMAGE_TYPES:
                 return src, IMAGE_TYPES[ext]
-            if name not in self.direct:
-                self.direct[name] = M.browser_plays(M.inspect(src, M.tools()))
-            if self.direct[name]:
+            if key not in self.direct:
+                self.direct[key] = M.browser_plays(M.inspect(src, M.tools()))
+            if self.direct[key]:
                 return src, "video/mp4"
             out = os.path.join(os.path.dirname(src), "proxy.mp4")
             if not os.path.exists(out):
                 M.proxy(src, out, M.tools())
-                self.trim(keep=name)
+                self.trim(keep=key)
             return out, "video/mp4"
 
     def drop(self, name):
@@ -1801,7 +1996,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         route = {"/api/overlay": self.post_overlay, "/api/brightness": self.post_brightness,
                  "/api/media/select": self.post_media_select, "/api/prefs": self.post_prefs,
                  "/api/media/upload/cancel": self.post_upload_cancel,
-                 "/api/media/delete": self.post_media_delete, "/api/display": self.post_display}.get(path)
+                 "/api/media/delete": self.post_media_delete, "/api/display": self.post_display,
+                 "/api/panel": self.post_panel, "/api/tray": self.post_tray,
+                 "/api/display/reset-choice": self.post_display_reset_choice,
+                 "/api/display/open-settings": self.post_display_open_settings}.get(path)
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -1839,7 +2037,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                     "uploadMax": MAX_UPLOAD},
                          "media": {k: dev.media[k] for k in ("preset", "custom")},
                          "upload": self.d.upload.snapshot() if self.d.upload else None,
-                         "display": self.d.display.status() if self.d.display else None})
+                         "display": self.d.display.status() if self.d.display else None,
+                         "panel": {"on": dev.panel_on}, "tray": tray_status(st["tray"]),
+                         "desktop": desktop_status()})
 
     def get_stats(self, _q):
         st = self.d.state.get()
@@ -1871,17 +2071,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.reply(200, {"ok": True, **dev.media})
 
     def media_file(self, query, make):
-        """Serve make(name, size) for ?name=, a file in /sdcard/pcMedia."""
+        """Serve make(name, size, folder) for ?name=, a file in /sdcard/pcMedia or a preset."""
         # <img> and <video> load across origins without a preflight. Refusing other sites' pages
         # stops them from making the daemon pull and encode files.
         if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
             return self.error(403, "only the ryuod page can load media previews")
         name = urllib.parse.parse_qs(query).get("name", [""])[0]
         dev = self.d.device
-        if not bare_name(name) or name not in dev.media["custom"]:
-            return self.error(404, f"not in /sdcard/pcMedia: {name} (GET /api/media?refresh=1)")
+        folder = media_folder(dev.media, name) if bare_name(name) else None
+        if folder is None:
+            return self.error(404, f"not in /sdcard/pcMedia or {PRESET_DIR[:-1]}: {name} (GET /api/media?refresh=1)")
+        size = (dev.media.get("sizes") or {}).get(name) if folder == P.MEDIA_DIR else None
         try:
-            path, ctype = make(name, (dev.media.get("sizes") or {}).get(name))
+            path, ctype = make(name, size, folder)
         except (M.MediaError, M.Cancelled, OSError) as e:
             return self.error(502, str(e))
         self.send_file(path, ctype)
@@ -1939,19 +2141,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """Send through the worker. Returns the response fields, or None after a 504."""
         return self.result(self.d.device.submit(method, cmd, body, wait))
 
-    def result(self, fut):
+    def result(self, fut, timeout=3):
         """The response fields for a worker job (fut None: the cooler is disconnected), or None
-        after replying with the error."""
+        after replying with the error. A command held while the panel is in standby adds
+        heldByStandby: true."""
         if fut is None:
             return {"applied": False, "acked": False}
         try:
-            res = fut.result(3)
+            res = fut.result(timeout)
         except concurrent.futures.TimeoutError:
-            self.error(504, "device worker did not answer within 3 s")
+            self.error(504, f"device worker did not answer within {timeout} s")
             return None
         if res.get("error"):
             self.error(400, res["error"])
             return None
+        if res.get("heldByStandby"):
+            return {"applied": False, "acked": False, "heldByStandby": True}
         return {"applied": res["applied"], "acked": res["acked"]}
 
     def post_overlay(self, body):
@@ -1971,16 +2176,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
         st = self.d.state.update(changes)
         res = self.apply("POST", "preset", P.preset(shown_items(st), overlay_settings(st)))
         if res is not None:
-            self.reply(200, {"ok": True, **res, "sent": ["POST preset"], "restartsVideo": False,
-                             "config": public_config(st)})
+            self.reply(200, {"ok": True, **res, "sent": [] if res.get("heldByStandby") else ["POST preset"],
+                             "restartsVideo": False, "config": public_config(st)})
 
     def post_brightness(self, body):
-        value = check_int(body.get("value"), "value", 0, P.BRIGHTNESS_MAX)
+        """{"value": 0-102} on the device scale, or {"percent": 0-100} of the 255 backlight levels."""
+        if "percent" in body:
+            value = brightness_value(check_int(body["percent"], "percent", 0, 100))
+        else:
+            value = check_int(body.get("value"), "value", 0, P.BRIGHTNESS_MAX)
         self.d.state.update({"brightness": value})
         res = self.apply("POST", "brightness", {"value": value})
         if res is not None:
-            self.reply(200, {"ok": True, **res, "sent": ["POST brightness"], "restartsVideo": False,
-                             "deviceLevel": min(255, int(value * 2.5))})
+            self.reply(200, {"ok": True, **res, "sent": [] if res.get("heldByStandby") else ["POST brightness"],
+                             "restartsVideo": False, "deviceLevel": min(255, int(value * 2.5)), "value": value,
+                             "percent": brightness_percent(value)})
 
     def post_media_select(self, body):
         media = body.get("media")
@@ -1994,8 +2204,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                     "restartsVideo": False, "config": public_config(st)})
         res = self.result(fut)
         if res is not None:
-            self.reply(200, {"ok": True, **res, "heldByDisplay": False, "sent": ["POST waterBlockScreenId"],
-                             "restartsVideo": True, "config": public_config(st)})
+            held = bool(res.get("heldByStandby"))
+            self.reply(200, {"ok": True, **res, "heldByDisplay": False,
+                             "sent": [] if held else ["POST waterBlockScreenId"], "restartsVideo": not held,
+                             "config": public_config(st)})
 
     def post_upload(self, query):
         """Stream the body to a file under the cache dir, then probe, convert, push and play it
@@ -2071,10 +2283,87 @@ class Handler(http.server.BaseHTTPRequestHandler):
             raise Invalid("on must be true or false")
         if self.d.display is None:
             return self.error(503, "second display is not available in this ryuod")
-        st = self.d.state.update({"secondDisplay": on})
-        self.d.display.set(on)
+        with self.d.switch_lock:
+            if on and not self.d.device.panel_on:
+                return self.error(409, "the panel is in standby; turn it on before the second display")
+            st = self.d.state.update({"secondDisplay": on})
+            self.d.display.set(on)
         log(f"display: switched {'on' if on else 'off'} from the control page")
         self.reply(200, {"ok": True, "display": self.d.display.status(), "config": public_config(st)})
+
+    def post_panel(self, body):
+        """Panel on, or standby: HomeUI's standby video, as when ryuod stops, with the daemon and its
+        heartbeat still running. Refused while the second-display switch is on."""
+        on = body.get("on")
+        if not isinstance(on, bool):
+            raise Invalid("on must be true or false")
+        dev = self.d.device
+        with self.d.switch_lock:
+            if not on and self.d.display is not None and self.d.display.status()["on"]:
+                return self.error(409, "the panel shows the second display; turn that off before standby")
+            fut, changed = dev.set_panel(on)
+        if changed:
+            log(f"panel: {'on' if on else 'standby'}")
+        # Back on: show() takes up to about 2 s of device time, after any job queued before it.
+        res = self.result(fut, timeout=6)
+        if res is None:
+            return
+        sent = []
+        if fut is not None:
+            sent = (["POST waterBlockScreen", "POST waterBlockScreenId", "POST power", "POST brightness"] if on
+                    else ["POST disconn"])
+        self.reply(200, {"ok": True, **res, "changed": changed, "sent": sent, "restartsVideo": fut is not None and on,
+                         "panel": {"on": dev.panel_on}})
+
+    def post_tray(self, body):
+        """Tray settings: {autostart, leftClick, brightnessSteps}, any subset. autostart writes or
+        removes the XDG autostart entry; the other two are saved in state.json for ryuo_tray.py."""
+        st = self.d.state.get()
+        tray = check_tray({k: body[k] for k in ("leftClick", "brightnessSteps") if k in body}, st["tray"])
+        autostart = body.get("autostart")
+        if "autostart" in body and not isinstance(autostart, bool):
+            raise Invalid("autostart must be true or false")
+        if isinstance(autostart, bool):
+            try:
+                set_autostart(autostart)
+            except OSError as e:
+                return self.error(500, f"cannot {'write' if autostart else 'remove'} {autostart_path()}: {e.strerror}")
+        st = self.d.state.update({"tray": tray})
+        self.reply(200, {"ok": True, "tray": tray_status(st["tray"])})
+
+    def post_display_reset_choice(self, _body):
+        """Delete the desktop portal's restore token, so the next start of the second display shows
+        Plasma's screen-sharing dialog again. A capture that runs keeps going. Refused while the
+        second display starts: the dialog may be open, and its answer writes a new token."""
+        if self.d.display is not None and self.d.display.status()["state"] == "starting":
+            return self.error(409, "the second display is starting; try again once it is on or off")
+        path = D.token_path()
+        existed = os.path.exists(path)
+        try:
+            D.write_token(path, None)
+        except OSError as e:
+            return self.error(500, f"cannot remove {path}: {e.strerror}")
+        if existed:
+            log("display: screen-share choice reset; the next start asks again")
+        self.reply(200, {"ok": True, "removed": existed, "desktop": desktop_status()})
+
+    def post_display_open_settings(self, _body):
+        """Open Plasma's Display Configuration (kcm_kscreen) in the user session, detached."""
+        cmd = display_settings_cmd()
+        if cmd is None:
+            return self.error(501, "neither kcmshell6 nor systemsettings is installed (KDE Plasma's display settings)")
+        try:
+            env = session_env(os.environ)
+        except NotReady as e:
+            return self.error(503, str(e))
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    env=env, start_new_session=True)
+        except OSError as e:
+            return self.error(500, f"cannot run {cmd[0]}: {e.strerror}")
+        threading.Thread(target=proc.wait, daemon=True, name="display-settings").start()  # reaps it
+        log(f"display: opened {' '.join(cmd)}")
+        self.reply(200, {"ok": True, "command": cmd})
 
     def post_prefs(self, body):
         st = self.d.state.get()
@@ -2113,6 +2402,7 @@ class Daemon:
     preview = Previews(default_preview_dir())
     media_lock = threading.Lock()   # one delete, or one change to device.media from a push, at a time
     display = None              # Display, the second-display supervisor
+    switch_lock = threading.Lock()  # the panel and second-display switches each check the other
 
     def __init__(self):
         self.backdrop = Backdrop(self)

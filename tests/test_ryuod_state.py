@@ -147,6 +147,25 @@ def test_load_rejects_bad_value(state_path, key, value):
         assert st["brightness"] == 7  # the good key next to it survives
 
 
+@pytest.mark.parametrize(("saved", "want"), [
+    ({"leftClick": "panel", "brightnessSteps": [60, 10]}, {"leftClick": "panel", "brightnessSteps": [10, 60]}),
+    ({"leftClick": "menu"}, {"leftClick": "menu", "brightnessSteps": [25, 50, 75, 100]}),
+    ({"leftClick": "nope", "brightnessSteps": [10]}, ryuod.DEFAULT_STATE["tray"]),
+    ({"brightnessSteps": [10, 10]}, ryuod.DEFAULT_STATE["tray"]),
+    ("page", ryuod.DEFAULT_STATE["tray"]),
+])
+def test_load_tray(state_path, saved, want):
+    write_json(state_path, {"tray": saved, "brightness": 40})
+    st = ryuod.State(state_path).get()
+    assert st["tray"] == want
+    assert st["brightness"] == 40  # a bad tray value falls back on its own
+
+
+def test_check_steps_sorts():
+    assert ryuod.check_steps([100, 1, 50]) == [1, 50, 100]
+    assert ryuod.check_steps([7]) == [7]
+
+
 def test_load_filter_merges_partial(state_path):
     write_json(state_path, {"filter": {"opacity": 30}})
     assert ryuod.State(state_path).get()["filter"] == {"on": False, "opacity": 30}
@@ -243,7 +262,8 @@ def test_overlay_settings_and_config_for():
 
 def test_public_config_keys():
     cfg = ryuod.public_config(dict(ryuod.DEFAULT_STATE))
-    assert set(cfg) == set(ryuod.DEFAULT_STATE) - {"version"}
+    # The tray's settings go out under GET /api/state's "tray"; brightnessPercent is derived.
+    assert set(cfg) == set(ryuod.DEFAULT_STATE) - {"version", "tray"} | {"brightnessPercent"}
 
 
 def test_fitted_config_drops_media_until_it_fits():

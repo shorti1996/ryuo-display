@@ -117,7 +117,7 @@ describe("initial load", () => {
     expect($("opacity").value).toBe("60");
     expect($("opacity").disabled).toBe(false);
     expect($("opacityOut").textContent).toBe("60 %");
-    expect($("brightness").value).toBe("41");
+    expect($("brightness").value).toBe("40");  // % of the 255 levels: 41 lights 102/255
     expect($("brightOut").textContent).toBe("40 %");
     expect($("playMode").value).toBe("Cycle");
     const unit = [...document.querySelectorAll("input[name=unit]")].filter((r) => r.checked).map((r) => r.value);

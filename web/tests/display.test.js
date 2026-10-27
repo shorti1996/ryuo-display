@@ -69,7 +69,7 @@ describe("second display", () => {
     expect($("mirrorChip").textContent).toBe("Desktop mirror · Virtual-RYUO 2240×1080");
     expect($("liveChip").hidden).toBe(true);
     expect($("mirrorHint").hidden).toBe(false);
-    expect($("mirrorHint").textContent).toBe(
+    expect($("mirrorHintText").textContent).toBe(
       "Position and scale: System Settings → Display & Monitor → Display Configuration → Virtual-RYUO",
     );
   });

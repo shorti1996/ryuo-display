@@ -7,6 +7,7 @@ resolves the Future at once, so the tests see exactly what would have gone to th
 
 import http.client
 import json
+import os
 import threading
 
 import pytest
@@ -393,8 +394,9 @@ def test_overlay_frame_too_large_is_400(api):
 # ---------------------------------------------------------------- POST /api/brightness
 
 
-@pytest.mark.parametrize(("value", "level"), [(0, 0), (40, 100), (85, 212), (100, 250), (102, 255)])
-def test_brightness(api, value, level):
+@pytest.mark.parametrize(("value", "level", "percent"), [(0, 0, 0), (40, 100, 39), (85, 212, 83), (100, 250, 98),
+                                                    (102, 255, 100)])
+def test_brightness(api, value, level, percent):
     status, _, body = api.post("/api/brightness", {"value": value})
     assert status == 200
     assert body == {
@@ -404,6 +406,8 @@ def test_brightness(api, value, level):
         "sent": ["POST brightness"],
         "restartsVideo": False,
         "deviceLevel": level,
+        "value": value,
+        "percent": percent,
     }
     assert api.sent == [("POST", "brightness", {"value": value})]
     assert api.disk_state()["brightness"] == value
@@ -625,6 +629,280 @@ def test_display_end_to_end_with_a_fake_child(api, tmp_path, monkeypatch):
     finally:
         assert api.d.display.stop(10)
         child.close()
+
+
+# ---------------------------------------------------------------- POST /api/panel
+
+
+def test_state_reports_the_panel(api):
+    assert api.get("/api/state")[2]["panel"] == {"on": True}
+    api.d.device.panel_on = False
+    assert api.get("/api/state")[2]["panel"] == {"on": False}
+
+
+def test_panel_standby_and_back(api):
+    status, _, body = api.post("/api/panel", {"on": False})
+    assert status == 200
+    assert body == {"ok": True, "applied": True, "acked": True, "changed": True, "sent": ["POST disconn"],
+                    "restartsVideo": False, "panel": {"on": False}}
+    status, _, body = api.post("/api/panel", {"on": True})
+    assert status == 200
+    assert body["sent"] == ["POST waterBlockScreen", "POST waterBlockScreenId", "POST power", "POST brightness"]
+    assert (body["changed"], body["restartsVideo"], body["panel"]) == (True, True, {"on": True})
+    assert api.sent == [(ryuod.PANEL, "standby", None), (ryuod.PANEL, "on", None)]
+
+
+def test_panel_switch_to_its_own_state_sends_nothing(api):
+    status, _, body = api.post("/api/panel", {"on": True})
+    assert status == 200
+    assert (body["changed"], body["applied"], body["sent"], body["restartsVideo"]) == (False, False, [], False)
+    assert api.sent == []
+
+
+def test_panel_while_disconnected_is_kept(api):
+    api.d.device.connected = False
+    status, _, body = api.post("/api/panel", {"on": False})
+    assert status == 200
+    assert (body["changed"], body["applied"], body["sent"], body["panel"]) == (True, False, [], {"on": False})
+
+
+@pytest.mark.parametrize("body", [{}, {"on": "false"}, {"on": 0}, {"on": None}])
+def test_panel_rejects(api, body):
+    status, _, resp = api.post("/api/panel", body)
+    assert (status, resp["error"]) == (400, "on must be true or false")
+    assert api.d.device.panel_on is True
+
+
+def test_no_standby_while_the_second_display_is_on(api):
+    api.d.display.set(True)
+    status, _, body = api.post("/api/panel", {"on": False})
+    assert status == 409
+    assert body["error"] == "the panel shows the second display; turn that off before standby"
+    assert api.d.device.panel_on is True
+    assert api.sent == []
+
+
+def test_no_second_display_in_standby(api):
+    api.post("/api/panel", {"on": False})
+    status, _, body = api.post("/api/display", {"on": True})
+    assert status == 409
+    assert body["error"] == "the panel is in standby; turn it on before the second display"
+    assert api.d.display.wanted == []
+    assert api.disk_state()["secondDisplay"] is False
+    assert api.post("/api/display", {"on": False})[0] == 200  # off is always allowed
+
+
+def test_standby_saves_brightness_overlay_and_playlist_without_sending(api):
+    api.post("/api/panel", {"on": False})
+    api.d.device.submitted.clear()
+    status, _, body = api.post("/api/brightness", {"value": 40})
+    assert status == 200
+    assert (body["applied"], body["heldByStandby"], body["sent"]) == (False, True, [])
+    status, _, body = api.post("/api/overlay", {"statsVisible": False})
+    assert (status, body["heldByStandby"], body["sent"]) == (200, True, [])
+    status, _, body = api.post("/api/media/select", {"media": [CUSTOM[0]]})
+    assert (status, body["heldByStandby"], body["sent"], body["restartsVideo"]) == (200, True, [], False)
+    assert api.sent == []
+    st = api.disk_state()
+    assert (st["brightness"], st["statsVisible"], st["media"]) == (40, False, [CUSTOM[0]])
+    # Not held: the unit does not show on the standby video.
+    api.post("/api/prefs", {"tempUnit": "Fahrenheit"})
+    assert api.sent == [("POST", "temperature", {"value": "Fahrenheit"})]
+
+
+# ---------------------------------------------------------------- brightness in percent
+
+
+def test_brightness_percent_mapping():
+    # Every percentage the device scale can give maps back to it; the other 9 land 1 % off.
+    for value in range(ryuod.P.BRIGHTNESS_MAX + 1):
+        pct = ryuod.brightness_percent(value)
+        assert ryuod.brightness_percent(ryuod.brightness_value(pct)) == pct
+    for pct in range(101):
+        assert abs(ryuod.brightness_percent(ryuod.brightness_value(pct)) - pct) <= 1
+    assert (ryuod.brightness_value(100), ryuod.brightness_value(50), ryuod.brightness_value(0)) == (102, 51, 0)
+
+
+def test_brightness_by_percent(api):
+    status, _, body = api.post("/api/brightness", {"percent": 25})
+    assert status == 200
+    assert (body["value"], body["percent"], body["deviceLevel"]) == (26, 25, 65)
+    assert api.sent == [("POST", "brightness", {"value": 26})]
+    assert api.get("/api/state")[2]["config"]["brightnessPercent"] == 25
+
+
+@pytest.mark.parametrize("pct", [101, -1, 50.5, "50", True, None])
+def test_brightness_percent_out_of_range(api, pct):
+    status, _, body = api.post("/api/brightness", {"percent": pct})
+    assert status == 400
+    assert body["error"] == "percent must be an integer 0-100"
+    assert api.sent == []
+
+
+# ---------------------------------------------------------------- POST /api/tray
+
+
+def autostart_file():
+    return ryuod.autostart_path()
+
+
+def test_state_reports_tray_defaults(api):
+    tray = api.get("/api/state")[2]["tray"]
+    assert tray == {"autostart": False, "leftClick": "page", "brightnessSteps": [25, 50, 75, 100],
+                    "brightnessStepValues": [26, 51, 76, 102], "leftClickOptions": ["page", "menu", "panel", "stats"]}
+
+
+def test_tray_settings_are_saved(api):
+    status, _, body = api.post("/api/tray", {"leftClick": "panel", "brightnessSteps": [80, 10, 100]})
+    assert status == 200
+    assert body["tray"]["leftClick"] == "panel"
+    assert body["tray"]["brightnessSteps"] == [10, 80, 100]
+    assert api.disk_state()["tray"] == {"leftClick": "panel", "brightnessSteps": [10, 80, 100]}
+    # A subset leaves the rest alone.
+    body = api.post("/api/tray", {"leftClick": "menu"})[2]
+    assert body["tray"]["brightnessSteps"] == [10, 80, 100]
+    assert api.sent == []
+
+
+def test_tray_autostart_writes_and_removes_the_entry(api, tmp_path):
+    path = autostart_file()
+    assert path == str(tmp_path / "home" / ".config" / "autostart" / "ryuo-tray.desktop")
+    status, _, body = api.post("/api/tray", {"autostart": True})
+    assert (status, body["tray"]["autostart"]) == (200, True)
+    with open(path) as f:
+        text = f.read()
+    assert f"Exec=/usr/bin/python3 {ryuod.HERE}/ryuo_tray.py\n" in text
+    assert "@APPDIR@" not in text
+    assert oct(os.stat(path).st_mode & 0o777) == "0o644"
+    assert api.get("/api/state")[2]["tray"]["autostart"] is True
+    status, _, body = api.post("/api/tray", {"autostart": False})
+    assert (status, body["tray"]["autostart"]) == (200, False)
+    assert not os.path.exists(path)
+    assert api.post("/api/tray", {"autostart": False})[0] == 200  # already gone
+
+
+def test_tray_autostart_write_error_is_500(api, monkeypatch):
+    def fail(on):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(ryuod, "set_autostart", fail)
+    status, _, body = api.post("/api/tray", {"autostart": True, "leftClick": "stats"})
+    assert status == 500
+    assert body["error"] == f"cannot write {autostart_file()}: Permission denied"
+    assert api.disk_state()["tray"]["leftClick"] == "page"
+
+
+@pytest.mark.parametrize(("body", "msg"), [
+    ({"leftClick": "double"}, "leftClick must be one of page, menu, panel, stats"),
+    ({"brightnessSteps": []}, "brightnessSteps must be a list of 1-8 integers 1-100"),
+    ({"brightnessSteps": list(range(1, 10))}, "brightnessSteps must be a list of 1-8 integers 1-100"),
+    ({"brightnessSteps": "25,50"}, "brightnessSteps must be a list of 1-8 integers 1-100"),
+    ({"brightnessSteps": [0, 50]}, "each brightness step must be an integer 1-100"),
+    ({"brightnessSteps": [50, 101]}, "each brightness step must be an integer 1-100"),
+    ({"brightnessSteps": [50, 50.5]}, "each brightness step must be an integer 1-100"),
+    ({"brightnessSteps": [50, 50]}, "brightnessSteps has the same value twice"),
+    ({"autostart": "yes"}, "autostart must be true or false"),
+])
+def test_tray_rejects(api, body, msg):
+    status, _, resp = api.post("/api/tray", {**body, "leftClick": "menu"} if "leftClick" not in body else body)
+    assert (status, resp["error"]) == (400, msg)
+    assert api.disk_state().get("tray", ryuod.DEFAULT_STATE["tray"]) == ryuod.DEFAULT_STATE["tray"]
+    assert not os.path.exists(autostart_file())
+
+
+# ---------------------------------------------------------------- POST /api/display/reset-choice
+
+
+def test_reset_choice_deletes_the_portal_token(api, tmp_path):
+    token = tmp_path / "home" / ".config" / "ryuo" / "display-portal-token"
+    assert ryuod.D.token_path() == str(token)
+    assert api.get("/api/state")[2]["desktop"]["portalTokenSaved"] is False
+    token.parent.mkdir(parents=True, exist_ok=True)
+    token.write_text("abc\n")
+    assert api.get("/api/state")[2]["desktop"]["portalTokenSaved"] is True
+    status, _, body = api.post("/api/display/reset-choice", {})
+    assert status == 200
+    assert (body["removed"], body["desktop"]["portalTokenSaved"]) == (True, False)
+    assert not token.exists()
+    status, _, body = api.post("/api/display/reset-choice", {})
+    assert (status, body["removed"]) == (200, False)
+
+
+def test_reset_choice_refused_while_the_display_starts(api, tmp_path):
+    token = tmp_path / "home" / ".config" / "ryuo" / "display-portal-token"
+    token.parent.mkdir(parents=True, exist_ok=True)
+    token.write_text("abc\n")
+    api.d.display.set(True)  # SwitchDisplay reports "starting"
+    status, _, body = api.post("/api/display/reset-choice", {})
+    assert (status, body["error"]) == (409, "the second display is starting; try again once it is on or off")
+    assert token.exists()
+
+
+def test_reset_choice_while_the_display_streams_removes_it(api, tmp_path, monkeypatch):
+    token = tmp_path / "home" / ".config" / "ryuo" / "display-portal-token"
+    token.parent.mkdir(parents=True, exist_ok=True)
+    token.write_text("abc\n")
+    monkeypatch.setattr(api.d.display, "status", lambda: {"on": True, "state": "on"})
+    assert api.post("/api/display/reset-choice", {})[2]["removed"] is True
+    assert not token.exists()
+
+
+# ---------------------------------------------------------------- POST /api/display/open-settings
+
+
+class FakePopen:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, argv, **kw):
+        self.calls.append((argv, kw))
+        return type("Proc", (), {"wait": lambda self: 0, "pid": 1})()
+
+
+@pytest.fixture
+def desktop(monkeypatch):
+    found = {}
+    popen = FakePopen()
+    monkeypatch.setattr(ryuod.shutil, "which", lambda name: found.get(name))
+    monkeypatch.setattr(ryuod.subprocess, "Popen", popen)
+    monkeypatch.setattr(ryuod, "session_env", lambda environ: {"WAYLAND_DISPLAY": "wayland-0"})
+    return type("Desktop", (), {"found": found, "popen": popen})
+
+
+@pytest.mark.parametrize(("installed", "cmd"), [
+    ({"kcmshell6", "systemsettings"}, ["kcmshell6", "kcm_kscreen"]),
+    ({"systemsettings"}, ["systemsettings", "kcm_kscreen"]),
+])
+def test_open_display_settings(api, desktop, installed, cmd):
+    desktop.found.update({n: f"/usr/bin/{n}" for n in installed})
+    assert api.get("/api/state")[2]["desktop"]["displaySettings"] == cmd[0]
+    status, _, body = api.post("/api/display/open-settings", {})
+    assert (status, body) == (200, {"ok": True, "command": cmd})
+    ((argv, kw),) = desktop.popen.calls
+    assert argv == cmd
+    assert kw["start_new_session"] is True
+    assert kw["env"] == {"WAYLAND_DISPLAY": "wayland-0"}
+    assert api.sent == []
+
+
+def test_open_display_settings_not_installed(api, desktop):
+    assert api.get("/api/state")[2]["desktop"]["displaySettings"] is None
+    status, _, body = api.post("/api/display/open-settings", {})
+    assert status == 501
+    assert body["error"] == "neither kcmshell6 nor systemsettings is installed (KDE Plasma's display settings)"
+    assert desktop.popen.calls == []
+
+
+def test_open_display_settings_without_a_session(api, desktop, monkeypatch):
+    desktop.found["kcmshell6"] = "/usr/bin/kcmshell6"
+
+    def not_ready(environ):
+        raise ryuod.NotReady("no Wayland session yet")
+
+    monkeypatch.setattr(ryuod, "session_env", not_ready)
+    status, _, body = api.post("/api/display/open-settings", {})
+    assert (status, body["error"]) == (503, "no Wayland session yet")
+    assert desktop.popen.calls == []
 
 
 # ---------------------------------------------------------------- request hygiene

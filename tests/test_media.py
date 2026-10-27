@@ -220,6 +220,25 @@ def test_device_name():
     long = M.device_name("a" * 100 + ".mp4", now)
     assert long == "2026-10-23_18-07-49-639_" + "a" * M.STEM_MAX + ".mp4"
     assert not M.device_name("RYUO_IV_HW_Info_01.mp4", now).startswith("RYUO")
+    assert M.device_name("Photo 1.JPEG", now, ext=".png") == "2026-10-23_18-07-49-639_Photo-1.png"
+    assert M.device_name("", now, ext=".png") == "2026-10-23_18-07-49-639.png"
+
+
+def test_still_image_is_its_own_error_type():
+    with pytest.raises(M.StillImage):
+        M.video_info({"format": {"format_name": "webp_pipe"}, "streams": [{"codec_type": "video"}]})
+    with pytest.raises(M.StillImage):
+        M.ffmpeg_info("Input #0, jpeg_pipe, from 'a.jpg':\n  Stream #0:0: Video: mjpeg, yuvj420p, 64x64\n")
+    assert issubclass(M.StillImage, M.MediaError)  # callers that only know MediaError still refuse it
+
+
+def test_still_to_png_reports_an_empty_result(tmp_path):
+    fake = tmp_path / "ffmpeg"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    with pytest.raises(M.MediaError, match="ffmpeg wrote no image"):
+        M.still_to_png(str(tmp_path / "in.png"), str(tmp_path / "out.png"), "crop", M.Tools(str(fake), None, "libx265"))
+    assert not (tmp_path / "out.png").exists()
 
 
 # ---------------------------------------------------------------- black image for the second display

@@ -47,6 +47,9 @@ class FakeDevice(ryuod.Device):
     def submit(self, method, cmd, body, wait=0.25):
         if not self.connected:
             return None
+        with self.lock:
+            if (held := self.held(cmd)) is not None:
+                return held
         self.submitted.append((method, cmd, body, wait))
         fut = concurrent.futures.Future()
         res = dict(self.result)
@@ -59,6 +62,18 @@ class FakeDevice(ryuod.Device):
                 self.set_media_from_conn({"media": self.conn_media})
         fut.set_result(res)
         return fut
+
+    def set_panel(self, on):
+        """Recorded as (ryuod.PANEL, "on" | "standby", None, None); resolves with self.result."""
+        if on == self.panel_on:
+            return None, False
+        self.panel_on = on
+        if not self.connected:
+            return None, True
+        self.submitted.append((ryuod.PANEL, "on" if on else "standby", None, None))
+        fut = concurrent.futures.Future()
+        fut.set_result(dict(self.result))
+        return fut, True
 
     @property
     def sent(self):

@@ -443,6 +443,84 @@ def test_submit_while_disconnected(rig):
     assert rig.device.submit("POST", "brightness", {"value": 1}) is None
 
 
+# ---------------------------------------------------------------- panel switch: standby with the heartbeat running
+
+
+def test_standby_sends_disconn_and_keeps_the_heartbeat(rig):
+    d = rig.device
+    d.start()
+    assert wait_until(lambda: rig.coolers)
+    cooler = rig.cooler
+    cooler.wait_for(count("all", 1))
+    cooler.clear()
+    fut, changed = d.set_panel(False)
+    assert changed and d.panel_on is False
+    assert fut.result(3) == {"applied": True, "acked": True}
+    received = cooler.wait_for(count("all", 3), timeout=5)
+    cmds = [c for _, c, _ in received]
+    assert cmds.count("disconn") == 1
+    assert ("POST", "disconn", None) in received
+    assert set(cmds) == {"disconn", "all"}  # nothing else: HomeUI stays in standby on heartbeats alone
+    assert d.status()["connected"] is True
+    assert d.recoveries == 0
+
+
+def test_standby_holds_commands_that_would_show(rig):
+    d = rig.device
+    d.dev = object()  # submit() only checks that a device is open
+    d.set_panel(False)
+    for cmd in ("brightness", "preset", "waterBlockScreenId"):
+        fut = d.submit("POST", cmd, {})
+        assert fut.result(0) == {"applied": False, "acked": False, "heldByStandby": True}
+    d.submit("POST", "temperature", {"value": "Celsius"})
+    assert [(j.method, j.cmd) for j in d.jobs] == [(ryuod.PANEL, "standby"), ("POST", "temperature")]
+    d.dev = None
+    d.fail_jobs()
+
+
+def test_panel_on_again_shows_the_saved_state(rig):
+    rig.state.update({"media": ["a.mp4"], "brightness": 60})
+    d = rig.device
+    d.start()
+    assert wait_until(lambda: rig.coolers)
+    cooler = rig.cooler
+    cooler.wait_for(count("all", 1))
+    d.set_panel(False)[0].result(3)
+    d.submit("POST", "brightness", {"value": 30})  # held; the state is what counts
+    rig.state.update({"brightness": 30, "media": ["b.mp4"]})
+    cooler.clear()
+    fut, changed = d.set_panel(True)
+    assert changed
+    assert fut.result(5) == {"applied": True, "acked": True}
+    cmds = [c for _, c, _ in cooler.received if c != "all"]
+    assert cmds == ["waterBlockScreen", "waterBlockScreenId", "power", "brightness"]
+    bodies = {c: b for _, c, b in cooler.received}
+    assert bodies["waterBlockScreenId"]["media"] == ["b.mp4"]
+    assert bodies["power"] == {"event": "resume"}
+    assert bodies["brightness"] == {"value": 30}
+    assert d.submit("POST", "brightness", {"value": 31}).result(3) == {"applied": True, "acked": True}
+
+
+def test_set_panel_to_the_state_it_is_in_sends_nothing(rig):
+    d = rig.device
+    d.dev = object()
+    assert d.set_panel(True) == (None, False)
+    assert not d.jobs
+    d.dev = None
+
+
+def test_set_panel_while_disconnected_is_kept_for_startup(rig):
+    d = rig.device
+    assert d.set_panel(False) == (None, True)
+    assert d.panel_on is False
+    cooler = rig.attach()
+    d.startup()
+    cmds = [c for _, c, _ in cooler.wait_for(count("all", 1))]
+    # A reconnect or recovery in standby goes back to standby instead of showing the media.
+    assert cmds == ["conn", "temperature", "disconn", "all"]
+    assert d.ready
+
+
 def test_run_job_frame_too_large(rig):
     cooler = rig.attach()
     job = ryuod.Job("POST", "preset", {"x": "a" * 1100})
