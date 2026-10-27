@@ -243,7 +243,3 @@ changed it, and those changes must be ported into the new page.
 - Step 2: the strip is drawn by the shell. Its mode buttons render but are not wired (step 3).
   The overlay box and the panel switch read `display.on` where the old page read its own
   `displayWant`, which also flips at the click; step 3 must replace it with the Mirror tab's.
-- Step 2: `actions.sendPrefs` (step 1) writes the value into the store before the POST and keeps
-  it on a refusal. A refused memory MHz (25000) therefore stays in `config.memoryMHz`, and the
-  slot lists offer Memory Frequency until the next accepted value; the old page kept ryuod's 0
-  there and showed the 25000 in the field only. No test covers it.

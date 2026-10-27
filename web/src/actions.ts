@@ -276,8 +276,10 @@ export function createActions(store: Store, poll: Poll) {
   }
 
   /**
-   * Temperature unit or memory MHz. The control keeps the user's value even when the POST
-   * fails; the next poll leaves it, since ryuod's value has not changed (state.mergeAround).
+   * Temperature unit or memory MHz. The store takes the value only from ryuod's reply: a value
+   * ryuod refuses (memory MHz above 20000, say) must not reach the slot lists. The control keeps
+   * what the user typed or clicked all the same, since its binding writes the DOM only when the
+   * store's value changes, and a refusal leaves it as it was.
    */
   function sendPrefs(body: PrefsBody): Promise<void> {
     const done =
@@ -290,8 +292,6 @@ export function createActions(store: Store, poll: Poll) {
           ? "the panel shows it from the next sample"
           : "Memory Frequency is hidden from the slot lists"
         : "";
-    const config = store.state.config;
-    if (config) store.patch({ config: { ...config, ...body } });
     return holding(["tempUnit", "memoryMHz", "sensors"], async () => {
       try {
         const reply = await postPrefs(body);

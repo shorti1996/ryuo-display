@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { $, choose, makeDaemon, openPage, preview, slot, tick } from "./harness-lit.js";
+import { $, choose, makeDaemon, openPage, option, preview, slot, tick } from "./harness-lit.js";
 
 const checkedAttr = (id) => $(id).getAttribute("aria-checked");
 
@@ -137,5 +137,21 @@ describe("the panel switch and the state poll", () => {
     await tick(1000);
     expect($("panelLabel").textContent).toBe("Standby");
     expect(checkedAttr("panelSwitch")).toBe("false");
+  });
+});
+
+describe("a memory MHz ryuod refuses", () => {
+  it("keeps the typed value in the field and does not offer Memory Frequency", async () => {
+    const daemon = await openPage();
+    $("memMHz").value = "25000"; // ryuod.post_prefs takes 0-20000
+    $("memMHz").dispatchEvent(new Event("change"));
+    await tick(0);
+    expect($("result").textContent).toBe("Memory MHz 25000 not saved: memoryMHz must be an integer 0-20000");
+    expect(daemon.config.memoryMHz).toBe(0);
+    expect($("memMHz").value).toBe("25000");
+    expect(option(slot(0), "Memory Frequency")).toBeUndefined();
+    await tick(1000);
+    expect($("memMHz").value).toBe("25000");
+    expect(option(slot(0), "Memory Frequency")).toBeUndefined();
   });
 });
