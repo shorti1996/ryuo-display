@@ -36,6 +36,12 @@ export interface AppState {
   desktop: DesktopStatus | null;
   panel: { on: boolean } | null;
   display: DisplayStatus | null;
+  /**
+   * The second-display switch as the strip, the Desktop mirror tab, the header and the hero show
+   * it: ryuod's display.on, or the user's click while its POST runs ("display.on" in `editing`).
+   * A poll copies display.on into it except while that key is held.
+   */
+  displayWant: boolean;
   upload: UploadStatus | null;
   stats: StatsReply | null;
   catalog: CatalogItem[];
@@ -65,6 +71,7 @@ function initialState(): AppState {
     desktop: null,
     panel: null,
     display: null,
+    displayWant: false,
     upload: null,
     stats: null,
     catalog: [],
@@ -240,7 +247,12 @@ export function createPoll(store: Store) {
       void loadMedia(false);
     }
     const first = !store.state.config;
-    store.patch({ device: reply.device, display: reply.display, upload: reply.upload });
+    // displayWant follows ryuod on every poll, as the old page's did, not only when ryuod's value
+    // changed: it is a status, not a setting the page saves. A ryuod without the second display
+    // leaves it as it was.
+    const display = reply.display;
+    const want = display && !store.state.editing.has("display.on") ? { displayWant: display.on } : {};
+    store.patch({ device: reply.device, display, upload: reply.upload, ...want });
     const changed = store.merge("config", reply.config);
     store.merge("tray", reply.tray);
     store.merge("desktop", reply.desktop);

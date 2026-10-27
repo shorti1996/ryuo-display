@@ -240,6 +240,20 @@ changed it, and those changes must be ported into the new page.
 - Step 2: the panel is merged like a settings section (key `panel.on`), so the switch keeps the
   click while its POST runs and is disabled meanwhile. The hero's Turn on button, also bound to
   `sendPanel`, is wired with the hero in step 4.
-- Step 2: the strip is drawn by the shell. Its mode buttons render but are not wired (step 3).
-  The overlay box and the panel switch read `display.on` where the old page read its own
-  `displayWant`, which also flips at the click; step 3 must replace it with the Mirror tab's.
+- Step 3: `displayWant` is store state. A click sets it and holds `display.on` while the POST
+  runs; every poll copies `display.on` into it unless held, with no `seen` comparison, as the old
+  page reconciled it on every poll. The POST reply updates the status line but not the switch:
+  the old page's `renderDisplay(j.display)` ran while `displaySending` was still true. The
+  strip's segments and overlay box, the header's panel switch and the hero read it.
+- Step 3: the hero's mirror view is `<ryuo-mirror-view>` inside the static hero, as the stats
+  preview is. It decides the hero's view without the preview: ryuod down, then standby, then the
+  mirror. Step 4's `ryuo-hero` must put the preview between "down" and "standby" (the old
+  `renderHero` order) and set `hero.dataset.view`, which nothing sets now.
+- Step 3: before the first poll the mirror controls stay enabled and the status line reads "…",
+  as the old page's markup did until `renderDisplay` first ran; "Not available" shows only once
+  a poll has answered without `display`.
+- Step 3: `errors.test.js` and `sync.test.js` stay on the old harness, blocked by the same five
+  cases as in step 2. `features.test.js` "sends the panel to standby: the hero goes black with
+  Turn on, and the mirror is locked out" checks the mirror lockout but also the hero's standby
+  view, so it is not copied; the other mirror cases (panel switch locked during the mirror, the
+  screen-share choice, Open Display Configuration) are copied into `mirror-tab.test.js`.

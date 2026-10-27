@@ -6,6 +6,7 @@ import type {
   BrightnessBody,
   BrightnessReply,
   CatalogReply,
+  DisplayReply,
   MediaReply,
   OpenSettingsReply,
   OverlayBody,
@@ -51,6 +52,7 @@ export const getMedia = (refresh = false) => api<MediaReply>(`/api/media${refres
 export const postOverlay = (body: OverlayBody) => api<OverlayReply>("/api/overlay", body);
 export const postBrightness = (body: BrightnessBody) => api<BrightnessReply>("/api/brightness", body);
 export const postPanel = (on: boolean) => api<PanelReply>("/api/panel", { on });
+export const postDisplay = (on: boolean) => api<DisplayReply>("/api/display", { on });
 export const postPrefs = (body: PrefsBody) => api<PrefsReply>("/api/prefs", body);
 export const postTray = (body: TrayBody) => api<TrayReply>("/api/tray", body);
 export const postResetChoice = () => api<ResetChoiceReply>("/api/display/reset-choice", {});

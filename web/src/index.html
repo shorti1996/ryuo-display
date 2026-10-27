@@ -8,10 +8,10 @@
 </head>
 <body>
 <!--
-  <ryuo-app> renders the header, the strip under the hero, the tab list, the Overlay and App tabs
-  and the result toast. The parts below are the old page's markup, not yet ported: the shell
-  takes them out before its first render and puts them back in place (ui/ryuo-app.ts). Each
-  later step replaces one with its element.
+  <ryuo-app> renders the header, the strip under the hero, the tab list, the Overlay, Desktop
+  mirror and App tabs and the result toast. The parts below are the old page's markup, not yet
+  ported: the shell takes them out before its first render and puts them back in place
+  (ui/ryuo-app.ts). Each later step replaces one with its element.
 -->
 <ryuo-app>
   <section class="hero" id="hero" aria-label="Panel preview">
@@ -35,12 +35,8 @@
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
-    <div class="mirror-view" id="mirrorView" hidden>
-      <div class="win" aria-hidden="true" style="left: 8%; top: 14%; width: 46%; height: 60%; background: #181B22; border: 1px solid #2A2E38"></div>
-      <div class="win" aria-hidden="true" style="left: 44%; top: 30%; width: 44%; height: 56%; background: #1B1F27; border: 1px solid #2E3340"></div>
-      <div class="chip" id="mirrorChip">Desktop mirror · Virtual-RYUO 2240×1080</div>
-      <p class="caption" id="mirrorHint"><span id="mirrorHintText">Position and scale: System Settings → Display &amp; Monitor → Display Configuration → Virtual-RYUO</span><button class="btn mini" id="mirrorSettings" type="button" aria-label="Open Display Configuration" title="Open Display Configuration" hidden>Open</button></p>
-    </div>
+    <!-- The desktop-mirror view: its chip and the Display Configuration caption. -->
+    <ryuo-mirror-view></ryuo-mirror-view>
     <div class="standby-view" id="standbyView" hidden>
       <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#7C8088" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>
       <b>ryuod is not answering</b>
@@ -92,38 +88,6 @@
     <div class="card stack" style="gap: 14px">
       <div class="card-head"><h3>Built-in presets</h3><span class="sub mono" id="presetSub">/sdcard/pcMediaPreset</span></div>
       <div class="tiles small" id="presets"></div>
-    </div>
-  </div>
-
-  <div role="tabpanel" id="tp-mirror" aria-labelledby="tab-mirror" class="cols" hidden>
-    <div class="card main-col stack" style="gap: 16px" id="displaySection">
-      <button class="big-switch" id="displaySwitch" type="button" role="switch" aria-checked="false" aria-describedby="displayText">
-        <span class="lbl"><b>Use the panel as a second display</b><span id="displayState"><span class="dot" id="displayDot"></span><span id="displayText" aria-live="polite">…</span></span></span>
-        <span class="track" aria-hidden="true"></span>
-      </button>
-      <pre class="mono" id="displayErr" hidden></pre>
-      <p class="note" id="displayBackground" hidden></p>
-      <div><button class="btn" id="displayRetry" type="button" hidden>Try again now</button></div>
-      <div class="lines" id="displayInfo">
-        <p>Adds Virtual-RYUO, a 2240×1080 virtual monitor, to the right of your main monitor. Windows dragged past its right edge appear on the panel.</p>
-        <p>The stats overlay and background video are hidden while it runs. Brightness still works.</p>
-        <p>The panel gets a new frame only when something on the virtual monitor changes. Turning it off removes the virtual monitor, which takes up to about 10 s.</p>
-        <p id="displaySettingsHint">To move Virtual-RYUO, use Edit Arrangement in System Settings → Display &amp; Monitor → Display Configuration; its scale is set there too (Plasma may start it at 200 %). Searching "Display Configuration" in KRunner or the app launcher opens that page.</p>
-        <div id="displaySettingsRow" hidden><button class="btn" id="displaySettingsOpen" type="button">Open Display Configuration</button></div>
-      </div>
-      <div class="pointer-row">
-        <div class="kv"><b>Mouse pointer</b><button class="btn" id="askAgain" type="button" hidden>Ask again</button></div>
-        <p class="note" id="displayPointer" hidden></p>
-        <p class="note">To show the pointer, the desktop asks once which screen to share: choose Virtual-RYUO and allow restoring, so later starts skip the question.</p>
-        <p class="note" id="choiceText" hidden></p>
-      </div>
-    </div>
-    <div class="card side-col" style="gap: 10px">
-      <h3>Requirements</h3>
-      <div class="req"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="2"/></svg><span>KDE Plasma on Wayland</span></div>
-      <div class="req"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="2"/></svg><span>krfb installed</span></div>
-      <div class="req"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="2"/></svg><span>NVIDIA GPU</span></div>
-      <p class="note">ryuod does not check these yet; a missing one shows as an error when the display starts.</p>
     </div>
   </div>
 </ryuo-app>

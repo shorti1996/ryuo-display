@@ -6,6 +6,7 @@
 
 import {
   postBrightness,
+  postDisplay,
   postOpenSettings,
   postOverlay,
   postPanel,
@@ -233,6 +234,31 @@ export function createActions(store: Store, poll: Poll) {
   }
 
   /**
+   * Start or stop the second display. The switch shows the click at once and keeps it until the
+   * first poll after the POST: the reply's status ("Starting…") shows at once, but displayWant
+   * waits for the poll, as the old page's did. A refusal turns the switch to the opposite of
+   * what was asked. Nothing here touches the config: the reply's copy predates any overlay or
+   * media edit still waiting in its debounce.
+   */
+  function sendDisplay(on: boolean): Promise<void> {
+    store.patch({ displayWant: on });
+    return holding(["display.on"], async () => {
+      try {
+        const reply = await postDisplay(on);
+        store.patch({ display: reply.display });
+        store.say(
+          on
+            ? "Second display starting"
+            : "Second display stopping; removing the virtual monitor takes up to about 10 s",
+        );
+      } catch (error) {
+        store.patch({ displayWant: !on });
+        fail(store, error, on ? "Second display not started" : "Second display not stopped");
+      }
+    });
+  }
+
+  /**
    * The tray settings in body. The control shows the new value at once; a refusal puts back
    * the settings ryuod has.
    */
@@ -349,6 +375,7 @@ export function createActions(store: Store, poll: Poll) {
     drag,
     endDrag,
     sendPanel,
+    sendDisplay,
     sendTray,
     addTrayStep,
     sendPrefs,

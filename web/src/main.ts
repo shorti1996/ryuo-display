@@ -5,6 +5,8 @@ import { createActions } from "./actions.ts";
 import { createPoll, Store } from "./state.ts";
 import { RyuoApp } from "./ui/ryuo-app.ts";
 import { RyuoAppTab } from "./ui/ryuo-app-tab.ts";
+import { RyuoMirrorTab } from "./ui/ryuo-mirror-tab.ts";
+import { RyuoMirrorView } from "./ui/ryuo-mirror-view.ts";
 import { RyuoOverlayTab } from "./ui/ryuo-overlay-tab.ts";
 import { RyuoSlotPicker } from "./ui/ryuo-slot-picker.ts";
 import { RyuoStatsPreview } from "./ui/ryuo-stats-preview.ts";
@@ -14,6 +16,8 @@ import { RyuoStatsPreview } from "./ui/ryuo-stats-preview.ts";
 for (const [name, element] of [
   ["ryuo-app", RyuoApp],
   ["ryuo-app-tab", RyuoAppTab],
+  ["ryuo-mirror-tab", RyuoMirrorTab],
+  ["ryuo-mirror-view", RyuoMirrorView],
   ["ryuo-overlay-tab", RyuoOverlayTab],
   ["ryuo-slot-picker", RyuoSlotPicker],
   ["ryuo-stats-preview", RyuoStatsPreview],
