@@ -84,6 +84,8 @@ DEFAULT_STATE = {
     "items": DEFAULT_ITEMS, "statsVisible": True, "titleColor": "#E5252B", "contentColor": "#FFFFFF",
     "filter": {"on": False, "opacity": 100}, "brightness": 100, "tempUnit": "Celsius",
     "memoryMHz": 0, "sensors": {"motherboard": "auto"}, "secondDisplay": False,
+    # The receiver's anti burn-in for the second display (shift, dim, black; class Display).
+    "burnInProtection": True,
     # brightnessSteps: % of the 255 backlight levels, as the page shows brightness.
     "tray": {"leftClick": "page", "brightnessSteps": [25, 50, 75, 100]},
 }
@@ -231,6 +233,11 @@ def brightness_percent(value):
     return round(min(255, int(value * 2.5)) * 100 / 255)
 
 
+def backlight_share(value):
+    """The backlight a device-scale brightness (0-102) gives, as a share of full (0-1)."""
+    return min(255, int(value * 2.5)) / 255
+
+
 def brightness_value(percent):
     """The device-scale brightness for a percentage (0-100). The 103 device values give 92 distinct
     percentages; brightness_percent() maps those back exactly, and the others to 1 % off."""
@@ -285,6 +292,7 @@ class State:
             "sensors": lambda v: {"motherboard": v.get("motherboard")}
             if isinstance(v, dict) and isinstance(v.get("motherboard"), str) else None,
             "secondDisplay": lambda v: v if isinstance(v, bool) else None,
+            "burnInProtection": lambda value: value if isinstance(value, bool) else None,
             "tray": lambda v: check_tray(v, d["tray"]),
         }
         for key, fn in loaders.items():
@@ -320,7 +328,7 @@ class State:
 def public_config(st):
     out = {k: st[k] for k in ("media", "playMode", "ratio", "items", "statsVisible", "titleColor",
                               "contentColor", "filter", "brightness", "tempUnit", "memoryMHz", "sensors",
-                              "secondDisplay")}
+                              "secondDisplay", "burnInProtection")}
     out["brightnessPercent"] = brightness_percent(st["brightness"])
     return out
 
@@ -340,8 +348,11 @@ def config_for(st):
 
 
 def black_config(st):
-    """config_for(st) with BLACK_NAME as the whole playlist."""
-    return P.screen_config([BLACK_NAME], "Single", st["ratio"], shown_items(st), overlay_settings(st))
+    """config_for(st) with BLACK_NAME as the whole playlist and the overlay off: what HomeUI shows
+    under the second display. The receiver's burn-in protection dims and shifts its picture over
+    black, so HomeUI must draw nothing there. st["items"] and st["statsVisible"] stay as saved, and
+    restore() sends them again with the saved media."""
+    return P.screen_config([BLACK_NAME], "Single", st["ratio"], [], overlay_settings(st))
 
 
 def fitted_config(st):
@@ -1045,6 +1056,13 @@ DISPLAY_STATS_RE = re.compile(r"sent ([0-9.]+) fps, ([0-9.]+) Mb/s")
 DISPLAY_RECEIVER_FPS_RE = re.compile(r"ryuo-display: [0-9.]+ fps")
 # ryuo_display.py's "pointer: shown" or "pointer: not shown: <reason>" line.
 DISPLAY_POINTER = "pointer: "
+# The receiver's burn-in protection (RyuoDisplay.Protection): its state every 5 s and on each change,
+# the sizes of the frames it got over those 5 s (for tuning what counts as a real change), and each
+# control message it took. None of them is the child's `message`.
+DISPLAY_PROTECTION_RE = re.compile(r"ryuo-display: protection state=([a-z]+) idle=(\d+)(?: shift=(\d+))?")
+DISPLAY_FRAMES_RE = re.compile(r"ryuo-display: frames((?: [A-Za-z]+=-?\d+)+)")
+DISPLAY_CONTROL = "ryuo-display: control: "
+NO_PROTECTION = {"state": None, "idleS": None, "nextShiftS": None, "frames": None}
 
 
 def display_pointer(line):
@@ -1055,6 +1073,24 @@ def display_pointer(line):
     if rest == "shown":
         return {"shown": True, "reason": None}
     return {"shown": False, "reason": rest.removeprefix("not shown: ") or None}
+
+
+def display_protection(line):
+    """{"state", "idleS", "nextShiftS"} from the receiver's protection line, else None. nextShiftS is
+    None while the protection is off."""
+    match = DISPLAY_PROTECTION_RE.fullmatch(line)
+    if not match:
+        return None
+    shift = match.group(3)
+    return {"state": match.group(1), "idleS": int(match.group(2)), "nextShiftS": int(shift) if shift else None}
+
+
+def display_frames(line):
+    """{field: int} from the receiver's frame-size line, else None. -1 stands for none."""
+    match = DISPLAY_FRAMES_RE.fullmatch(line)
+    if not match:
+        return None
+    return {key: int(value) for key, value in (field.split("=") for field in match.group(1).split())}
 
 
 class NotReady(Exception):
@@ -1121,7 +1157,12 @@ class Display(threading.Thread):
 
     With a `backdrop` (class Backdrop), HomeUI is switched to a black image once the child reports
     "streaming to the panel", and back to the saved media before a child is stopped or after it
-    exits on its own."""
+    exits on its own.
+
+    Burn-in protection runs in the receiver on the cooler. set_protection() gives the child whether
+    it is on and the backlight share it dims from: as arguments when it starts, and as lines on its
+    stdin while it runs, which it forwards to the receiver at once. The stream, the capture and the
+    virtual monitor are never restarted for it. The receiver's reports land in status()["protection"]."""
 
     def __init__(
         self, cmd=None, environ=None, cooler=lambda: None, backoff=DISPLAY_BACKOFF, stop_s=DISPLAY_STOP_S, backdrop=None
@@ -1142,6 +1183,8 @@ class Display(threading.Thread):
         self.terminating = False  # SIGTERM sent to the current child
         self.resume_state = None  # the state set(False) replaced with "stopping"
         self.tail = collections.deque(maxlen=DISPLAY_TAIL)
+        self.protect = (True, 1.0)  # (on, backlight share), sent to every child
+        self.prot = dict(NO_PROTECTION)  # the receiver's last report; None fields until one comes
         # backgroundError: why HomeUI could not be switched to the black image; kept through retries
         # until a switch succeeds or the switch is turned off.
         self.st = {
@@ -1172,10 +1215,31 @@ class Display(threading.Thread):
 
     def status(self):
         with self.cond:
-            out = {"on": self.want, **self.st, "retryInS": None}
+            out = {"on": self.want, **self.st, "retryInS": None,
+                   "protection": {"enabled": self.protect[0], **self.prot}}
             if self.retry_at is not None and self.st["state"] == "retrying":
                 out["retryInS"] = max(0, round(self.retry_at - time.monotonic()))
             return out
+
+    def set_protection(self, on, backlight):
+        """Burn-in protection on or off, and the backlight as a share of full (0-1). A running child
+        gets them on its stdin and the receiver applies them within about a second."""
+        with self.cond:
+            if (on, backlight) == self.protect:
+                return
+            self.protect = (on, backlight)
+            if self.proc is not None:
+                self.send_protection(self.proc)
+
+    def send_protection(self, proc):
+        """Write self.protect to proc's stdin. Call with self.cond held. The pipe is non-blocking, so
+        a child that stopped reading cannot stall the caller; the change is then lost for that child."""
+        on, backlight = self.protect
+        try:
+            proc.stdin.write(f"protection {'on' if on else 'off'}\nbacklight {backlight:.3f}\n")
+            proc.stdin.flush()
+        except (OSError, ValueError) as error:
+            log(f"display: could not pass the burn-in protection setting to ryuo_display.py ({error})")
 
     def stop(self, timeout):
         """Stop the child (if any) and the thread. False if it is still running after timeout s."""
@@ -1227,10 +1291,15 @@ class Display(threading.Thread):
             return self.failed(str(e), permanent=False)
         self.tail.clear()
         self.update(state="starting", fps=None, mbps=None, message=None, error=None, pointer=None)
+        with self.cond:
+            self.prot = dict(NO_PROTECTION)
+            sent = self.protect
+        on, backlight = sent
+        args = ["--control-stdin", "--protection", "on" if on else "off", "--backlight", f"{backlight:.3f}"]
         try:
             proc = subprocess.Popen(
-                self.cmd,
-                stdin=subprocess.DEVNULL,
+                [*self.cmd, *args],
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -1242,8 +1311,11 @@ class Display(threading.Thread):
         except OSError as e:
             return self.failed(f"cannot run {self.cmd[0]}: {e.strerror}", permanent=True)
         log(f"display: started ryuo_display.py (pid {proc.pid})")
+        os.set_blocking(proc.stdin.fileno(), False)
         with self.cond:
             self.proc = proc
+            if self.protect != sent:  # changed while the child was being started
+                self.send_protection(proc)
         reader = threading.Thread(target=self.read, args=(proc,), daemon=True, name="display-output")
         reader.start()
         stopped = black = False
@@ -1269,6 +1341,9 @@ class Display(threading.Thread):
         with self.cond:
             self.proc, self.terminating = None, False
             streamed = self.st["state"] == "on"  # reached "streaming to the panel" before it exited
+            self.prot = dict(NO_PROTECTION)
+            with contextlib.suppress(OSError, ValueError):
+                proc.stdin.close()
         if black:
             self.backdrop.restore()
         if stopped:
@@ -1296,19 +1371,37 @@ class Display(threading.Thread):
     def read(self, proc):
         for line in proc.stdout:
             line = line.rstrip("\n")
-            m = DISPLAY_STATS_RE.fullmatch(line.strip())
+            stats = DISPLAY_STATS_RE.fullmatch(line.strip())
+            prot = display_protection(line.strip())
+            frames = display_frames(line.strip())
+            changed = False
             with self.cond:
-                self.tail.append(line)
-                if m:
-                    self.st.update(fps=float(m.group(1)), mbps=float(m.group(2)))
+                # The receiver's protection and frame-size lines come every 5 s, so they stay out of the
+                # tail and never end up in an error message. A protection line is logged only when the
+                # state changes.
+                if prot is not None:
+                    changed = prot["state"] != self.prot["state"]
+                    self.prot.update(prot)
+                elif frames is not None:
+                    self.prot["frames"] = frames
+                else:
+                    self.tail.append(line)
+                if stats:
+                    self.st.update(fps=float(stats.group(1)), mbps=float(stats.group(2)))
                 elif (pointer := display_pointer(line.strip())) is not None:
                     self.st["pointer"] = pointer
-                elif line.strip() and not DISPLAY_RECEIVER_FPS_RE.fullmatch(line.strip()):
+                elif (
+                    line.strip()
+                    and prot is None
+                    and frames is None
+                    and not DISPLAY_RECEIVER_FPS_RE.fullmatch(line.strip())
+                    and not line.strip().startswith(DISPLAY_CONTROL)
+                ):
                     self.st["message"] = line
                 if line.startswith("streaming to the panel") and self.st["state"] == "starting":
                     self.st["state"] = "on"
                     self.cond.notify_all()  # run_child switches HomeUI to the black image
-            quiet = m or DISPLAY_RECEIVER_FPS_RE.fullmatch(line.strip())
+            quiet = stats or DISPLAY_RECEIVER_FPS_RE.fullmatch(line.strip()) or frames or (prot and not changed)
             if line.strip() and (not quiet or VERBOSE):
                 log(f"display: {line}")
 
@@ -1398,14 +1491,14 @@ class Backdrop:
         log("display: HomeUI switched back to the saved media")
         job_result(fut)
 
-    def submit(self, cfg, wait=1.0):
-        """Queue the user's waterBlockScreenId on the device worker: (future, False). While HomeUI
-        is held on BLACK_NAME, nothing is queued and this returns (None, True); restore() sends the
-        saved selection later."""
+    def submit(self, cfg, wait=1.0, cmd="waterBlockScreenId"):
+        """Queue the user's waterBlockScreenId (or, with cmd "preset", the overlay) on the device
+        worker: (future, False). While HomeUI is held on BLACK_NAME, nothing is queued and this
+        returns (None, True); restore() sends the saved selection and overlay later."""
         with self.lock:
             if self.on:
                 return None, True
-            return self.d.device.submit("POST", "waterBlockScreenId", cfg, wait), False
+            return self.d.device.submit("POST", cmd, cfg, wait), False
 
 
 # ---------------------------------------------------------------- desktop: tray autostart, portal token, display settings
@@ -2001,6 +2094,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                  "/api/media/delete": self.post_media_delete, "/api/display": self.post_display,
                  "/api/panel": self.post_panel, "/api/tray": self.post_tray,
                  "/api/display/reset-choice": self.post_display_reset_choice,
+                 "/api/display/protection": self.post_display_protection,
                  "/api/display/open-settings": self.post_display_open_settings}.get(path)
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
         try:
@@ -2203,9 +2297,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 raise Invalid("statsVisible must be true or false")
             changes["statsVisible"] = body["statsVisible"]
         st = self.d.state.update(changes)
-        res = self.apply("POST", "preset", P.preset(shown_items(st), overlay_settings(st)))
+        # Under the second display the overlay stays off (black_config); restore() brings it back.
+        fut, held = self.d.backdrop.submit(P.preset(shown_items(st), overlay_settings(st)), 0.25, "preset")
+        if held:
+            return self.reply(200, {"ok": True, "applied": False, "acked": False, "heldByDisplay": True, "sent": [],
+                                    "restartsVideo": False, "config": public_config(st)})
+        res = self.result(fut)
         if res is not None:
-            self.reply(200, {"ok": True, **res, "sent": [] if res.get("heldByStandby") else ["POST preset"],
+            self.reply(200, {"ok": True, **res, "heldByDisplay": False,
+                             "sent": [] if res.get("heldByStandby") else ["POST preset"],
                              "restartsVideo": False, "config": public_config(st)})
 
     def post_brightness(self, body):
@@ -2214,7 +2314,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             value = brightness_value(check_int(body["percent"], "percent", 0, 100))
         else:
             value = check_int(body.get("value"), "value", 0, P.BRIGHTNESS_MAX)
-        self.d.state.update({"brightness": value})
+        st = self.d.state.update({"brightness": value})
+        self.d.sync_protection(st)  # the receiver dims from the backlight
         res = self.apply("POST", "brightness", {"value": value})
         if res is not None:
             self.reply(200, {"ok": True, **res, "sent": [] if res.get("heldByStandby") else ["POST brightness"],
@@ -2319,6 +2420,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.d.display.set(on)
         log(f"display: switched {'on' if on else 'off'} from the control page")
         self.reply(200, {"ok": True, "display": self.d.display.status(), "config": public_config(st)})
+
+    def post_display_protection(self, body):
+        """Burn-in protection for the second display: {"enabled": bool}. Saved in state.json; a
+        running second display applies it within about a second, without restarting anything."""
+        enabled = body.get("enabled")
+        if not isinstance(enabled, bool):
+            raise Invalid("enabled must be true or false")
+        st = self.d.state.update({"burnInProtection": enabled})
+        self.d.sync_protection(st)
+        log(f"display: burn-in protection {'on' if enabled else 'off'} from the control page")
+        self.reply(200, {"ok": True, "protection": self.d.protection_status(st), "config": public_config(st)})
 
     def post_panel(self, body):
         """Panel on, or standby: HomeUI's standby video, as when ryuod stops, with the daemon and its
@@ -2436,6 +2548,18 @@ class Daemon:
     def __init__(self):
         self.backdrop = Backdrop(self)
 
+    def sync_protection(self, st=None):
+        """Pass the saved burn-in setting and the backlight share to the second display."""
+        st = st or self.state.get()
+        if self.display is not None:
+            self.display.set_protection(st["burnInProtection"], backlight_share(st["brightness"]))
+
+    def protection_status(self, st):
+        """display.status()["protection"], or the saved setting alone without a second display."""
+        if self.display is not None:
+            return self.display.status()["protection"]
+        return {"enabled": st["burnInProtection"], **NO_PROTECTION}
+
 
 def is_ryuod(pid):
     try:
@@ -2500,6 +2624,7 @@ def main():
         cooler=lambda: d.device.recoveries if d.device.status()["connected"] else None, backdrop=d.backdrop
     )
     d.display.start()
+    d.sync_protection()
     if d.state.get()["secondDisplay"]:
         log("display: switch saved on; starting the second display")
         d.display.set(True)

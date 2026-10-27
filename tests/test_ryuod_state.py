@@ -71,6 +71,7 @@ def test_load_valid_file(state_path):
         "memoryMHz": 6000,
         "sensors": {"motherboard": "gigabyte_wmi:temp2"},
         "secondDisplay": True,
+        "burnInProtection": False,
         "unknown": "ignored",
     }
     write_json(state_path, saved)
@@ -89,6 +90,7 @@ def test_load_valid_file(state_path):
         "memoryMHz",
         "sensors",
         "secondDisplay",
+        "burnInProtection",
     ):
         assert st[key] == saved[key], key
     assert "unknown" not in st
@@ -111,6 +113,7 @@ def test_load_partly_invalid_each_key_falls_back(state_path):
             "memoryMHz": True,  # bool is not an int here
             "sensors": {"motherboard": 5},
             "secondDisplay": "on",
+            "burnInProtection": "off",
         },
     )
     s = ryuod.State(state_path)
@@ -137,6 +140,9 @@ def test_load_partly_invalid_each_key_falls_back(state_path):
         ("sensors", "auto"),
         ("secondDisplay", 1),
         ("secondDisplay", None),
+        ("burnInProtection", 0),
+        ("burnInProtection", "false"),
+        ("burnInProtection", None),
     ],
 )
 def test_load_rejects_bad_value(state_path, key, value):
@@ -192,6 +198,21 @@ def test_update_saves_and_returns_copy(state_path):
     assert on_disk["brightness"] == 40
     assert on_disk["statsVisible"] is False
     assert not os.path.exists(state_path + ".tmp")
+
+
+def test_burn_in_protection_is_on_by_default_and_persists(state_path):
+    assert ryuod.State(state_path).get()["burnInProtection"] is True
+    # A state file from before the setting existed: on.
+    write_json(state_path, {"brightness": 40})
+    assert ryuod.State(state_path).get()["burnInProtection"] is True
+    ryuod.State(state_path).update({"burnInProtection": False})
+    assert ryuod.State(state_path).get()["burnInProtection"] is False
+    assert ryuod.public_config(ryuod.State(state_path).get())["burnInProtection"] is False
+
+
+@pytest.mark.parametrize(("value", "share"), [(0, 0), (40, 100 / 255), (100, 250 / 255), (102, 1.0)])
+def test_backlight_share(value, share):
+    assert ryuod.backlight_share(value) == share
 
 
 def test_stats_visible_persists_across_restart(state_path):
@@ -258,6 +279,17 @@ def test_overlay_settings_and_config_for():
     assert cfg["sysinfoDisplay"] == ryuod.DEFAULT_ITEMS
     assert cfg["settings"]["filter"] == {"value": "Smoke", "opacity": 55}
     assert cfg["timeZone"] == "Europe/Warsaw"
+
+
+def test_black_config_has_no_overlay_and_keeps_the_saved_one():
+    st = dict(ryuod.DEFAULT_STATE, media=["a.mp4"], items=["CPU Load", "", "", "", "", ""], statsVisible=True)
+    cfg = ryuod.black_config(st)
+    assert (cfg["media"], cfg["playMode"]) == ([ryuod.BLACK_NAME], "Single")
+    assert cfg["sysinfoDisplay"] == [""] * 6
+    assert cfg["settings"] == ryuod.overlay_settings(st)
+    # The user's slots are untouched and come back with the saved media.
+    assert st["items"] == ["CPU Load", "", "", "", "", ""] and st["statsVisible"] is True
+    assert ryuod.config_for(st)["sysinfoDisplay"] == ["CPU Load", "", "", "", "", ""]
 
 
 def test_public_config_keys():

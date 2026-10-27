@@ -512,7 +512,8 @@ keeps running, so HomeUI stays out of standby under the receiver's layer. The re
 {"ok":true,"display":{"on":true,"state":"starting","fps":null,"mbps":null,"message":null,"error":null,"retryInS":null},"config":{…}}
 ```
 
-`GET /api/state` carries the same `display` object, `null` in a daemon without the feature.
+`GET /api/state` carries the same `display` object, `null` in a daemon without the feature. It also
+has `protection` (below).
 `state` is one of:
 
 | state | meaning |
@@ -526,6 +527,45 @@ keeps running, so HomeUI stays out of standby under the receiver's layer. The re
 
 The child is never sent SIGKILL before 60 s: a receiver killed while it holds the hardware decoder
 leaks it. On shutdown the daemon stops the child before the device worker sends `disconn`.
+
+`display.protection` reports the receiver's burn-in protection (added 2026-10-27, `docs/009-burn-in/`):
+
+```json
+"protection":{"enabled":true,"state":"dimmed","idleS":214,"nextShiftS":46,
+              "frames":{"n":12,"floor":4990,"small":12,"smallMax":85,"big":0,"bigMin":-1,"rapid":0}}
+```
+
+| field | meaning |
+|---|---|
+| `enabled` | the saved setting, `config.burnInProtection` |
+| `state` | `active`, `dimmed`, `black`, `refresh` (the 2 s black every 5 min) or `off` (setting off), as the receiver last reported it; `null` while no child streams or before its first report (within 5 s of the first frame) |
+| `idleS` | seconds since the last real change on the panel; `null` with `state` |
+| `nextShiftS` | seconds to the next 4 px move; `null` while `state` is `off` or `null` |
+| `frames` | diagnostics for tuning, over the receiver's last 5 s with frames: count, the floor in bytes, frames under the real-change threshold and the largest excess among them, frames over it and the smallest excess, small frames that counted by their rate; `-1` for none; `null` until the first report |
+
+The receiver reports every 5 s and on each state change; ryuod logs only the state changes.
+
+### `POST /api/display/protection`
+
+Added 2026-10-27. Request `{"enabled":false}`; anything but a boolean `enabled` is 400
+`enabled must be true or false`. Saves `burnInProtection` in state.json (default `true`; echoed in
+`config`) and passes it to a running `ryuo_display.py` on its stdin, which forwards it to the
+receiver within about a second. Nothing is restarted and nothing is sent over HID. Works with the
+second display off: the next start uses it. Response:
+
+```json
+{"ok":true,"protection":{"enabled":false,"state":"active","idleS":3,"nextShiftS":120,"frames":null},"config":{…}}
+```
+
+`protection` is the same object as in `GET /api/state` (in a daemon without the second-display
+feature: `enabled` and `null` fields). Its `state` still shows the receiver's last report and turns
+`off` with the receiver's next line. `POST /api/brightness` also passes the new backlight to the
+receiver, which dims from it.
+
+While display mode streams, `POST /api/overlay` saves the change without sending it (HomeUI shows
+plain black under the receiver) and replies `"applied":false,"heldByDisplay":true,"sent":[]`; the
+overlay is sent with the saved media when display mode stops. Otherwise its reply carries
+`"heldByDisplay":false`.
 
 ---
 

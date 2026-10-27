@@ -173,7 +173,7 @@
       <div><button class="btn" id="displayRetry" type="button" ?hidden=${!r} @click=${()=>s?.sendDisplay(!0)}>Try again now</button></div>
       ${this.#s(t)} ${this.#i(t,f)}`}#s(t){const s=!!t?.desktop?.displaySettings;return u`<div class="lines" id="displayInfo">
       <p>Adds Virtual-RYUO, a 2240×1080 virtual monitor, to the right of your main monitor. Windows dragged past its right edge appear on the panel.</p>
-      <p>The stats overlay and background video are hidden while it runs. Brightness still works.</p>
+      <p>While it runs, HomeUI shows a plain black backdrop with no stats overlay; overlay changes are saved and applied when it stops. Brightness still works.</p>
       <p>The panel gets a new frame only when something on the virtual monitor changes. Turning it off removes the virtual monitor, which takes up to about 10 s.</p>
       <p id="displaySettingsHint">To move Virtual-RYUO, use Edit Arrangement in System Settings → Display &amp; Monitor → Display Configuration; its scale is set there too (Plasma may start it at 200 %). Searching "Display Configuration" in KRunner or the app launcher opens that page.</p>
       <div id="displaySettingsRow" ?hidden=${!s}><button class="btn" id="displaySettingsOpen" type="button"

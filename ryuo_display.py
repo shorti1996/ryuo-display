@@ -31,6 +31,10 @@ What runs, in start order (teardown goes in reverse):
      windows are otherwise captured at about 1 frame/s, with either stream.
   7. When the times of the frames sent show KWin capturing in its slow cycle of 3 frames every
      100-500 ms, the tool restarts KWin's stream the same way (see "KWin's slow capture cycle").
+  8. The receiver protects the OLED panel from burn-in by itself: it shifts the picture by a few
+     pixels, dims it and then blacks it out while the desktop stays still. This process tells it
+     only whether that is on and how bright the backlight is (see "burn-in protection" below);
+     ryuod passes changes on through stdin (--control-stdin).
 
 KWin sends a frame only when something on the virtual output changes: a still desktop sends
 nothing and the panel keeps the last frame.
@@ -68,6 +72,9 @@ RECEIVER_CLASS = "RyuoDisplay"
 SOCKET_NAME = "ryuo-display"
 PANEL_W, PANEL_H = 2240, 1080
 NAL_AUD = 35
+# HEVC leaves NAL types 48-63 unspecified, for applications; the receiver reads type 48 as a control
+# message and never passes it to its decoder.
+NAL_CONTROL = 48
 # HEVC access unit delimiter: 4-byte start code, NAL header (type 35, layer 0, temporal id 0),
 # then pic_type 2 ("I, P or B slices") and the RBSP stop bit.
 AUD = b"\0\0\0\1\x46\x01\x50"
@@ -150,8 +157,28 @@ def parse_args(argv=None):
         help=f"seconds to wait for an answer in the screen-selection dialog before going on without the pointer "
         f"(default {DIALOG_TIMEOUT})",
     )
+    p.add_argument(
+        "--protection",
+        choices=("on", "off"),
+        default="on",
+        help="the receiver's burn-in protection: shift, dim and black out a still picture (default on)",
+    )
+    p.add_argument(
+        "--backlight",
+        type=float,
+        default=1.0,
+        metavar="SHARE",
+        help="the panel's backlight as a share of full, 0-1, which sets how far the receiver dims (default 1)",
+    )
+    p.add_argument(
+        "--control-stdin",
+        action="store_true",
+        help="read 'protection on|off' and 'backlight SHARE' lines from stdin and pass them to the receiver",
+    )
     p.add_argument("-v", "--verbose", action="store_true", help="also print krfb-virtualmonitor's output")
     a = p.parse_args(argv)
+    if not 0 <= a.backlight <= 1:
+        p.error("--backlight must be between 0 and 1")
     if a.dialog_timeout <= 0:
         p.error("--dialog-timeout must be more than 0 s")
     if not BITRATE_RANGE[0] <= a.bitrate <= BITRATE_RANGE[1]:
@@ -409,6 +436,50 @@ def panel_frame(au):
     return strip_leading_aud(au) + AUD
 
 
+# ---------------------------------------------------------------- burn-in protection
+
+# The receiver runs the protection's timers itself (RyuoDisplay.Protection), so they go on when the
+# stream stalls or the PC sleeps. It needs two facts only the PC has: whether the protection is on,
+# and the backlight as a share of full, which sets how far it dims. Both travel in the stream itself,
+# as a control message between two frames: no second socket or adb forward, and every new connection
+# starts with the current values, so a reconnect cannot leave the receiver with stale ones. Until the
+# first message arrives the receiver has the protection on with the backlight at full.
+
+
+def control_unit(protect, backlight):
+    """A control message for the receiver: a NAL unit of type NAL_CONTROL whose payload is ASCII,
+    which has no zero bytes and so cannot contain a start code. The Relay sends it with a delimiter
+    after it, so the receiver cuts it off as an access unit of its own at once."""
+    text = f"ryuo protect={int(bool(protect))} backlight={backlight:.3f}"
+    return b"\0\0\0\1" + bytes((NAL_CONTROL << 1, 1)) + text.encode("ascii")
+
+
+def parse_control(line):
+    """The set_protection() arguments in one --control-stdin line ("protection on", "protection off",
+    "backlight 0.392"), or None for any other line."""
+    words = line.split()
+    if words == ["protection", "on"]:
+        return {"protect": True}
+    if words == ["protection", "off"]:
+        return {"protect": False}
+    if len(words) == 2 and words[0] == "backlight":
+        with contextlib.suppress(ValueError):
+            share = float(words[1])
+            if 0 <= share <= 1:
+                return {"backlight": share}
+    return None
+
+
+def read_control(stream, apply):
+    """Pass each control line of stream to apply(**changes) until the stream ends; runs on a thread."""
+    for line in stream:
+        changes = parse_control(line)
+        if changes is not None:
+            apply(**changes)
+        elif line.strip():
+            say(f"warning: ignored control line {line.strip()!r}")
+
+
 class Stats:
     def __init__(self):
         self.frames = 0
@@ -445,13 +516,17 @@ class Relay:
     mid-stream. first_frame is set when the first frame read from the current pipe has been sent.
 
     slow_cycle is the cycle length in ms while the current pipe's frames show KWin's slow capture
-    cycle (see SlowCycle), else None. The SlowCycle is fed and reset on this thread only."""
+    cycle (see SlowCycle), else None. The SlowCycle is fed and reset on this thread only.
 
-    def __init__(self, sock, stats, on_error):
+    control(unit) sends a control_unit() between two frames, followed by a delimiter; a unit given to
+    the constructor goes out first, before any frame."""
+
+    def __init__(self, sock, stats, on_error, control=None):
         self.sock, self.stats, self.on_error = sock, stats, on_error
         self.lock = threading.Lock()
         self.fd = None
         self.closed = False
+        self.pending = control
         self.first_frame = threading.Event()
         self.slow = SlowCycle()
         self.slow_cycle = None
@@ -468,6 +543,11 @@ class Relay:
             self.slow_cycle = None
         os.write(self.wake_w, b"x")
 
+    def control(self, unit):
+        with self.lock:
+            self.pending = unit
+        os.write(self.wake_w, b"x")
+
     def close(self):
         with self.lock:
             self.closed = True
@@ -482,9 +562,12 @@ class Relay:
             self.sock.sendall(AUD)
             while True:
                 with self.lock:
-                    fd, closed = self.fd, self.closed
+                    fd, closed, unit = self.fd, self.closed, self.pending
+                    self.pending = None
                 if closed:
                     return
+                if unit is not None:
+                    self.sock.sendall(unit + AUD)
                 if fd != current:
                     if current is not None:
                         os.close(current)
@@ -1091,6 +1174,23 @@ class Session:
         self.reason = None
         self.stats = Stats()
         self.portal_used = False
+        self.relay = None
+        # What the receiver is told about burn-in protection; control_lock keeps a change from
+        # slipping in between reading these and creating the relay that sends them first.
+        self.control_lock = threading.Lock()
+        self.protect = a.protection == "on"
+        self.backlight = a.backlight
+
+    def set_protection(self, protect=None, backlight=None):
+        """Change what the receiver is told: sent at once while streaming, else first thing when
+        the stream starts."""
+        with self.control_lock:
+            if protect is not None:
+                self.protect = protect
+            if backlight is not None:
+                self.backlight = backlight
+            if self.relay is not None:
+                self.relay.control(control_unit(self.protect, self.backlight))
 
     def fail(self, reason):
         if not self.failed.is_set():
@@ -1242,7 +1342,8 @@ class Session:
         sock.settimeout(SEND_TIMEOUT)
 
         self.source_port = source[0]
-        self.relay = Relay(sock, self.stats, self.fail)
+        with self.control_lock:
+            self.relay = Relay(sock, self.stats, self.fail, control_unit(self.protect, self.backlight))
         self.generation = 0
         self.link_retries = 0
         self.gst = self.spare = None
@@ -1433,6 +1534,8 @@ def main(argv=None):
     status = 0
     try:
         s = Session(a, stack)
+        if a.control_stdin:
+            threading.Thread(target=read_control, args=(sys.stdin, s.set_protection), daemon=True).start()
         s.check_free()
         s.start_receiver()
         source = s.start_monitor()

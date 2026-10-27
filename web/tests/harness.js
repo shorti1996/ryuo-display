@@ -70,6 +70,7 @@ export function defaultConfig() {
     items: ["CPU Temperature", "GPU Temperature", "Fan Speed Disk R MB/s", "Date&Time", "", ""],
     statsVisible: true, titleColor: "#E5252B", contentColor: "#FFFFFF", filter: { on: false, opacity: 100 },
     brightness: 100, tempUnit: "Celsius", memoryMHz: 0, sensors: { motherboard: "auto" }, secondDisplay: false,
+    burnInProtection: true,
   };
 }
 
@@ -114,14 +115,26 @@ class Invalid extends Error {}
 // A refusal with a status other than 400.
 class Refused extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 
+/** ryuod's display.protection before the receiver's first report, or while it does not stream. */
+export function defaultProtection() {
+  return { state: null, idleS: null, nextShiftS: null, frames: null };
+}
+
 /**
  * A fake ryuod. Tests change `config`, `device`, `stats`, `mediaLists` directly, queue one-off
  * replies with `replyOnce`, and read what the page sent from `calls`.
  */
 export function makeDaemon({
-  config = {}, device = {}, stats = {}, media, display = {}, upload = null, panel = {}, tray = {}, desktop = {},
+  config = {}, device = {}, stats = {}, media, display = {}, upload = null, legacy = false, panel = {}, tray = {}, desktop = {},
+  protection = {},
 } = {}) {
   const d = {
+    // The receiver's burn-in report in display.protection; `enabled` comes from config.burnInProtection.
+    protection: { ...defaultProtection(), ...clone(protection) },
+    // A ryuod from before burn-in protection: no config.burnInProtection, no display.protection,
+    // no POST /api/display/protection, and overlay edits applied under the second display. Only
+    // that: the page needs the panel, tray and desktop sections, so an older ryuod is not faked.
+    legacy,
     panel: { on: true, ...clone(panel) },
     tray: { ...defaultTray(), ...clone(tray) },
     desktop: { ...defaultDesktop(), ...clone(desktop) },
@@ -166,7 +179,17 @@ export function makeDaemon({
 
   const reply = (status, body) => ({ status, body });
   // public_config(): what every reply that carries the config sends.
-  const pub = () => ({ ...clone(d.config), brightnessPercent: brightnessPercent(d.config.brightness) });
+  const pub = () => {
+    const out = { ...clone(d.config), brightnessPercent: brightnessPercent(d.config.brightness) };
+    if (d.legacy) delete out.burnInProtection;
+    return out;
+  };
+  const displayStatus = () => {
+    if (d.display === null) return null;
+    const out = clone(d.display);
+    if (!d.legacy) out.protection = { enabled: d.config.burnInProtection, ...clone(d.protection) };
+    return out;
+  };
   const trayStatus = () => ({
     ...clone(d.tray), brightnessStepValues: d.tray.brightnessSteps.map(brightnessValue), leftClickOptions: [...TRAY_CLICKS],
   });
@@ -181,7 +204,7 @@ export function makeDaemon({
       ok: true, device: clone(d.device), config: pub(),
       limits: { slots: 6, brightnessMax: 102, frameMax: 1024, lastHeartbeatBytes: 548 },
       media: { preset: [...d.mediaLists.preset], custom: [...d.mediaLists.custom] },
-      display: clone(d.display), upload: clone(d.upload),
+      display: displayStatus(), upload: clone(d.upload),
       panel: clone(d.panel), tray: trayStatus(), desktop: clone(d.desktop),
     }),
     "GET /api/stats": () => {
@@ -218,6 +241,10 @@ export function makeDaemon({
         ch.statsVisible = body.statsVisible;
       }
       Object.assign(d.config, ch);
+      // Under the second display the overlay stays off; ryuod applies it when the display stops.
+      if (!d.legacy && (d.held || (d.display && d.display.on))) {
+        return reply(200, { ok: true, applied: false, acked: false, heldByDisplay: true, sent: [], restartsVideo: false, config: pub() });
+      }
       if (standby()) return reply(200, { ok: true, ...heldReply, sent: [], restartsVideo: false, config: pub() });
       return reply(200, { ok: true, ...applied(), sent: ["POST preset"], restartsVideo: false, config: pub() });
     },
@@ -286,7 +313,7 @@ export function makeDaemon({
       if (body.on && standby()) return err(409, "the panel is in standby; turn it on before the second display");
       d.config.secondDisplay = body.on;
       d.display = { ...defaultDisplay(), on: body.on, state: body.on ? "starting" : "stopping" };
-      return reply(200, { ok: true, display: clone(d.display), config: pub() });
+      return reply(200, { ok: true, display: displayStatus(), config: pub() });
     },
     "POST /api/panel": (body) => {
       if (typeof body.on !== "boolean") throw new Invalid("on must be true or false");
@@ -319,6 +346,11 @@ export function makeDaemon({
       }
       d.tray = t;
       return reply(200, { ok: true, tray: trayStatus() });
+    },
+    "POST /api/display/protection": (body) => {
+      if (typeof body.enabled !== "boolean") throw new Invalid("enabled must be true or false");
+      d.config.burnInProtection = body.enabled;
+      return reply(200, { ok: true, protection: displayStatus()?.protection ?? { enabled: body.enabled, ...defaultProtection() }, config: pub() });
     },
     "POST /api/display/reset-choice": () => {
       if (d.display && d.display.state === "starting") throw new Refused(409, "the second display is starting; try again once it is on or off");
@@ -353,7 +385,8 @@ export function makeDaemon({
     const method = opt.method || "GET";
     const [path, query = ""] = String(url).split("?");
     const route = `${method} ${path}`;
-    if (!String(url).startsWith("/api/") || !(route in routes)) {
+    const added = ["POST /api/display/protection"];
+    if (!String(url).startsWith("/api/") || !(route in routes) || (d.legacy && added.includes(route))) {
       globalThis.__strayRequests.push(`fetch ${method} ${url}`);
       throw new Error(`fake daemon has no route for ${method} ${url}`);
     }
