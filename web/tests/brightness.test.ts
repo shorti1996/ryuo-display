@@ -6,6 +6,8 @@
 import { describe, expect, it } from "vitest";
 
 import { backlightLevel, brightnessLabel, brightnessPercent, brightnessValue, pythonRound } from "../src/brightness.ts";
+// @ts-expect-error The harness is plain JavaScript with no type declarations.
+import * as fake from "./harness-lit.js";
 
 describe("pythonRound", () => {
   it.each([
@@ -73,6 +75,22 @@ describe("percent to the device scale", () => {
     for (let value = 0; value <= 102; value++) {
       const percent = brightnessPercent(value);
       expect(brightnessPercent(brightnessValue(percent))).toBe(percent);
+    }
+  });
+});
+
+// The page tests' fake ryuod has its own copy of the two mappings; a page test that passes only
+// holds for ryuod if the page and the fake agree on every input.
+describe("agreement with the fake ryuod's mappings (tests/harness.js)", () => {
+  it("brightnessPercent matches for every device value 0-102", () => {
+    for (let value = 0; value <= 102; value++) {
+      expect(brightnessPercent(value), `value ${value}`).toBe(fake.brightnessPercent(value));
+    }
+  });
+
+  it("brightnessValue matches for every percent 0-100", () => {
+    for (let percent = 0; percent <= 100; percent++) {
+      expect(brightnessValue(percent), `${percent} %`).toBe(fake.brightnessValue(percent));
     }
   });
 });

@@ -121,6 +121,18 @@ describe("clipWarning", () => {
       "Title runs past the panel's right edge: slot 3 (Hard Disk Temperature), slot 4 (Memory Frequency). Slots 1, 2 and 6 have room for it.",
     );
   });
+
+  it("names a custom label that clips in its slot", () => {
+    expect(clipWarning(CATALOG, ["", "", "", "", "Fan Speed Pump Header", ""])).toBe(
+      "Title runs past the panel's right edge: slot 5 (Fan Speed Pump Header). Slots 1, 2 and 6 have room for it.",
+    );
+  });
+
+  it("checks each slot against its own clipsIn, and ignores items the catalog does not list", () => {
+    // Memory Frequency clips only in slot 4; an unknown label has no clipsIn to check.
+    expect(clipWarning(CATALOG, ["", "", "Memory Frequency", "", "Fan Speed Unknown Very Long Label", ""])).toBe("");
+    expect(clipWarning([], ["Hard Disk Temperature", "", "Hard Disk Temperature", "", "", ""])).toBe("");
+  });
 });
 
 describe("the preview's cells", () => {
@@ -150,6 +162,42 @@ describe("colours and the POST body", () => {
   it("drops the alpha of #AARRGGBB, as <input type=color> does", () => {
     expect(rgbHex("#80E5252B")).toBe("#E5252B");
     expect(rgbHex("#e5252b")).toBe("#e5252b");
+  });
+
+  it("drops the alpha of a lower-case #aarrggbb and leaves other lengths as they are", () => {
+    expect(rgbHex("#80e5252b")).toBe("#e5252b");
+    expect(rgbHex("#FF00FF00")).toBe("#00FF00");
+    expect(rgbHex("")).toBe("");
+  });
+
+  it("sends statsVisible true unless it is false, and the opacity as a number", () => {
+    const config = {
+      items: ["", "", "", "", "", ""],
+      titleColor: "#e5252b",
+      contentColor: "#FF00FF00",
+      filter: { on: false, opacity: "35" },
+    } as unknown as Config;
+    expect(overlayBody(config)).toEqual({
+      items: ["", "", "", "", "", ""],
+      statsVisible: true,
+      titleColor: "#E5252B",
+      contentColor: "#00FF00",
+      filter: { on: false, opacity: 35 },
+    });
+    expect(overlayBody({ ...config, statsVisible: false }).statsVisible).toBe(false);
+  });
+
+  it("copies the items, so a later slot edit does not change a body already built", () => {
+    const config = {
+      items: ["CPU Load", "", "", "", "", ""],
+      statsVisible: true,
+      titleColor: "#E5252B",
+      contentColor: "#FFFFFF",
+      filter: { on: false, opacity: 100 },
+    } as Config;
+    const body = overlayBody(config);
+    config.items[0] = "GPU Load";
+    expect(body.items[0]).toBe("CPU Load");
   });
 
   it("sends every overlay field, colours as #RRGGBB in capitals", () => {
