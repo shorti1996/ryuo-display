@@ -18,6 +18,7 @@ import type {
   PanelReply,
   PrefsBody,
   PrefsReply,
+  ProtectionReply,
   ResetChoiceReply,
   StateReply,
   StatsReply,
@@ -65,6 +66,7 @@ export const postPrefs = (body: PrefsBody) => api<PrefsReply>("/api/prefs", body
 export const postTray = (body: TrayBody) => api<TrayReply>("/api/tray", body);
 export const postResetChoice = () => api<ResetChoiceReply>("/api/display/reset-choice", {});
 export const postOpenSettings = () => api<OpenSettingsReply>("/api/display/open-settings", {});
+export const postProtection = (enabled: boolean) => api<ProtectionReply>("/api/display/protection", { enabled });
 
 /** A file's thumbnail (a still from ryuod's ffmpeg) or its preview (playable in a browser). */
 export const mediaUrl = (kind: "thumb" | "preview", name: string) =>

@@ -5,6 +5,7 @@ import { mediaUrl, previewError } from "../api.ts";
 import { mirrorChipText, mirrorHintShown } from "../display.ts";
 import { heroFile, heroHint, heroView, isImage, liveName, livePlayable } from "../media.ts";
 import { rgbHex, type SlotCell, slotCell } from "../overlay.ts";
+import { protectionChip } from "../protection.ts";
 import type { AppState } from "../state.ts";
 import { RyuoElement } from "./ryuo-element.ts";
 
@@ -48,16 +49,19 @@ function statsPreview(state: AppState) {
 }
 
 /**
- * The desktop-mirror view: two sketched windows, the chip naming the display's state, and the
- * caption saying where KDE places and scales Virtual-RYUO.
+ * The desktop-mirror view: two sketched windows, the chip naming the display's state, burn-in
+ * protection's chip (red while protection is off), and the caption saying where KDE places and
+ * scales Virtual-RYUO.
  */
 function mirrorView(state: AppState, actions: Actions | undefined, shown: boolean) {
   const status = state.display;
+  const protection = state.protection;
   const open = !!state.desktop?.displaySettings;
   return html`<div class="mirror-view" id="mirrorView" ?hidden=${!shown}>
     <div class="win" aria-hidden="true" style="left: 8%; top: 14%; width: 46%; height: 60%; background: #181B22; border: 1px solid #2A2E38"></div>
     <div class="win" aria-hidden="true" style="left: 44%; top: 30%; width: 44%; height: 56%; background: #1B1F27; border: 1px solid #2E3340"></div>
     <div class="chip" id="mirrorChip">${mirrorChipText(status)}</div>
+    <div class=${protection && !protection.enabled ? "chip prot warn" : "chip prot"} id="protChip" ?hidden=${!protection}>${protection ? protectionChip(protection) : ""}</div>
     <p class="caption" id="mirrorHint" ?hidden=${!mirrorHintShown(status)}><span id="mirrorHintText">Position and scale: System Settings → Display &amp; Monitor → Display Configuration → Virtual-RYUO</span><button
       class="btn mini" id="mirrorSettings" type="button" aria-label="Open Display Configuration" title="Open Display Configuration"
       ?hidden=${!open} @click=${() => actions?.openDisplaySettings()}>Open</button></p>

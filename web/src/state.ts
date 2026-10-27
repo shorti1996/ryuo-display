@@ -14,6 +14,7 @@ import type {
   StatsReply,
   TrayStatus,
 } from "./api-types.ts";
+import { type Protection, protectionFrom } from "./protection.ts";
 import { fromPoll, NO_UPLOAD, type UploadProgress } from "./upload.ts";
 
 /** The result toast. Hiding it keeps the text, as the old page did. */
@@ -42,6 +43,14 @@ export interface AppState {
    * A poll copies display.on into it except while that key is held.
    */
   displayWant: boolean;
+  /**
+   * Burn-in protection as the Desktop mirror tab's card and the hero chip show it: ryuod's
+   * config.burnInProtection, or the user's click while its POST runs ("burnInProtection" in
+   * `editing`), with the receiver's last report. Null for a ryuod without the setting.
+   */
+  protection: Protection | null;
+  /** The card asks before protection goes off. */
+  protectionAsking: boolean;
   /** The upload as the drop zone and its status line show it (upload.ts). */
   upload: UploadProgress;
   stats: StatsReply | null;
@@ -87,6 +96,8 @@ function initialState(): AppState {
     panel: null,
     display: null,
     displayWant: false,
+    protection: null,
+    protectionAsking: false,
     upload: NO_UPLOAD,
     stats: null,
     catalog: [],
@@ -272,7 +283,15 @@ export function createPoll(store: Store) {
     const display = reply.display;
     const want = display && !store.state.editing.has("display.on") ? { displayWant: display.on } : {};
     const { progress, finished } = fromPoll(store.state.upload, reply.upload);
-    store.patch({ device: reply.device, display, upload: progress, ...want });
+    // Taken from every poll, as the old page's syncProtection did: the switch is ryuod's unless
+    // its POST is running, and the receiver's report is always the latest.
+    const protection = protectionFrom(
+      reply.config,
+      display,
+      store.state.protection,
+      store.state.editing.has("burnInProtection"),
+    );
+    store.patch({ device: reply.device, display, upload: progress, protection, ...want });
     const changed = store.merge("config", reply.config);
     // A playlist from ryuod (the first poll, or another client's change) replaces the draft.
     const config = store.state.config;

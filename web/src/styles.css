@@ -165,6 +165,9 @@ button:disabled > .track { opacity: .5; }
 .mirror-view .win { position: absolute; border-radius: 8px; }
 .mirror-view .win::before { content: ""; display: block; height: 9%; border-radius: 8px 8px 0 0; background: #22262F; }
 .mirror-view .chip { font-family: var(--mono); background: rgba(10, 10, 12, .7); }
+/* Burn-in protection's state, top right; red while protection is off. */
+.mirror-view .chip.prot { left: auto; right: 14px; max-width: 45%; font-family: var(--ui); }
+.mirror-view .chip.prot.warn { color: var(--bad); border: 1px solid var(--bad-border); }
 /* Where KDE moves and scales the virtual monitor; a caption under the faux windows. */
 .mirror-view .caption {
   position: absolute; left: 14px; bottom: 12px; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 28px);
@@ -187,6 +190,7 @@ button:disabled > .track { opacity: .5; }
   .pvbar.asking .btn:not(.icon) { padding: 0 10px; }
   .chip, .hero-status { top: 8px; }
   .chip { left: 8px; }
+  .mirror-view .chip.prot { right: 8px; }
   .mirror-view .caption { left: 8px; bottom: 6px; max-width: calc(100% - 16px); font-size: 11px; }
   .hero-status { right: 8px; }
 }
@@ -324,6 +328,13 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
 .pointer-row .kv { min-height: 40px; }
 .req { display: flex; align-items: center; gap: 10px; min-height: 32px; }
 .req svg { flex: none; color: var(--muted); }
+
+#protCard .big-switch .lbl b { font-size: 14px; }
+#protWarn, #protAsk p { color: var(--bad); }
+#protAsk { display: flex; flex-direction: column; gap: 10px; }
+#protAsk p { margin: 0; font-size: 13px; }
+#protAsk .row { display: flex; flex-wrap: wrap; gap: 8px; }
+.note.mirror-held { color: var(--text-2); }
 
 /* ---------- app tab ---------- */
 #trayCard { padding: 8px 20px; }

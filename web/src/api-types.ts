@@ -51,6 +51,28 @@ export interface Config {
   memoryMHz: number;
   sensors: { motherboard: string };
   secondDisplay: boolean;
+  /**
+   * The receiver's burn-in protection for the second display. Missing from a ryuod older than
+   * the feature; the page then hides its card and chip (protection.ts).
+   */
+  burnInProtection?: boolean;
+}
+
+/**
+ * ryuod.Display.status()["protection"]: the switch and the receiver's last report, from
+ * ryuod.display_protection(). The report fields are null until the receiver's first report and
+ * while the second display does not stream.
+ */
+export interface ProtectionStatus {
+  enabled: boolean;
+  /** The receiver's word: "active", "dimmed", "black", "refresh" or "off". */
+  state: string | null;
+  /** Seconds since the last real change on the desktop. */
+  idleS: number | null;
+  /** Seconds to the next shift of the picture; null while protection is off. */
+  nextShiftS: number | null;
+  /** ryuod.display_frames(): frame sizes over the last 5 s, for tuning; the page does not show them. */
+  frames: Record<string, number> | null;
 }
 
 /** ryuod.Display.status(): GET /api/state's "display"; null for a ryuod run without it. */
@@ -65,6 +87,8 @@ export interface DisplayStatus {
   pointer: { shown: boolean; reason: string | null } | null;
   backgroundError: string | null;
   retryInS: number | null;
+  /** Missing from a ryuod older than burn-in protection. */
+  protection?: ProtectionStatus;
 }
 
 /** ryuod.Upload.snapshot(): GET /api/state's "upload"; null before the first upload. */
@@ -233,6 +257,12 @@ export interface UploadReply extends Ok {
 /** ryuod.Handler.post_display(): POST /api/display. */
 export interface DisplayReply extends Ok {
   display: DisplayStatus;
+  config: Config;
+}
+
+/** ryuod.Handler.post_display_protection(): POST /api/display/protection. */
+export interface ProtectionReply extends Ok {
+  protection: ProtectionStatus;
   config: Config;
 }
 

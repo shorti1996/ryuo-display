@@ -13,6 +13,7 @@ import {
   postOverlay,
   postPanel,
   postPrefs,
+  postProtection,
   postResetChoice,
   postTray,
   postUploadCancel,
@@ -23,6 +24,7 @@ import { brightnessValue } from "./brightness.ts";
 import { liveName } from "./media.ts";
 import { OVERLAY_KEYS, overlayBody, rgbHex } from "./overlay.ts";
 import { deleteText, playlistOrder, playlistText, tickFile } from "./playlist.ts";
+import { protectionReplied } from "./protection.ts";
 import { report } from "./report.ts";
 import { fail, type Poll, type Store } from "./state.ts";
 import { sendEnded, sending, uploadActive } from "./upload.ts";
@@ -272,6 +274,60 @@ export function createActions(store: Store, poll: Poll) {
       } catch (error) {
         store.patch({ displayWant: !on });
         fail(store, error, on ? "Second display not started" : "Second display not stopped");
+      }
+    });
+  }
+
+  /**
+   * The burn-in protection switch was clicked: on goes out at once; off asks first in the card,
+   * since a desktop left on the panel for hours can mark it. Returns true when it asks.
+   */
+  function toggleProtection(): boolean {
+    const protection = store.state.protection;
+    if (!protection) return false;
+    if (!protection.enabled) {
+      void sendProtection(true);
+      return false;
+    }
+    store.patch({ protectionAsking: true });
+    return true;
+  }
+
+  function cancelProtection(): void {
+    store.patch({ protectionAsking: false });
+  }
+
+  /**
+   * Burn-in protection on or off. The switch shows the click at once and is disabled while the
+   * POST runs; the hold keeps a poll from setting it back meanwhile. A refusal puts back the
+   * value it had.
+   */
+  function sendProtection(enabled: boolean): Promise<void> {
+    const current = store.state.protection;
+    if (!current) return Promise.resolve();
+    const previous = current.enabled;
+    store.patch({ protectionAsking: false, protection: { ...current, enabled } });
+    const done = `Burn-in protection ${enabled ? "on" : "off"}`;
+    return holding(["burnInProtection"], async () => {
+      try {
+        const reply = await postProtection(enabled);
+        const saved = reply.config.burnInProtection ?? enabled;
+        store.saw("config", { burnInProtection: saved });
+        const { config, protection } = store.state;
+        store.patch({
+          ...(protection ? { protection: protectionReplied(protection, reply.protection, saved) } : {}),
+          ...(config ? { config: { ...config, burnInProtection: saved } } : {}),
+        });
+        // ryuod hands a running mirror the change within about 1 s; otherwise it is used on the next start.
+        store.say(
+          store.state.displayWant
+            ? `${done} — applies to the panel within 1 s`
+            : `${done}; applies from the next start of the second display`,
+        );
+      } catch (error) {
+        const protection = store.state.protection;
+        if (protection) store.patch({ protection: { ...protection, enabled: previous } });
+        fail(store, error, enabled ? "Burn-in protection not turned on" : "Burn-in protection not turned off");
       }
     });
   }
@@ -548,6 +604,9 @@ export function createActions(store: Store, poll: Poll) {
     endDrag,
     sendPanel,
     sendDisplay,
+    toggleProtection,
+    cancelProtection,
+    sendProtection,
     sendTray,
     addTrayStep,
     sendPrefs,

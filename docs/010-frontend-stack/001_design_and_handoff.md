@@ -1,7 +1,7 @@
 # Control page rewrite: Lit + TypeScript + Vite
 
-Status: implemented on branch frontend-lit, 2026-10-27; pending: port of the burn-in-protection
-branch's page changes, then merge. Designed the same day in a design interview in a Claude Code
+Status: implemented on branch frontend-lit, burn-in-protection merged and its page feature ported,
+2026-10-27; ready to merge to main. Designed the same day in a design interview in a Claude Code
 session. Work happens in the `frontend-lit` branch, worktree
 `/home/shared/repos/rog-ryuo-lcd-frontend-lit`, while `burn-in-protection` continues in the main
 checkout.
@@ -145,7 +145,8 @@ order, kept so a later reader can find the discussion.
 | 5 | Switch: ryuod serves `dist/`, old page and harness deleted, Makefile targets, README, `dist/` committed. | yes, this is the merge point |
 
 Before the merge, diff `web/index.html` against `main`: the `burn-in-protection` branch may have
-changed it, and those changes must be ported into the new page.
+changed it, and those changes must be ported into the new page. Done: `burn-in-protection` (da82253)
+is merged and its card, chip and overlay note are ported (`protection.ts`).
 
 ## Files
 
@@ -269,3 +270,18 @@ changed it, and those changes must be ported into the new page.
   after it passes when run alone. New Python code in this step is formatted as ruff wants.
 - Step 5: `make test-frontend` also fails when the build adds a file git does not track yet (a new
   font, say): `git diff` alone does not see untracked files.
+- Burn-in port: both branches created a `docs/009-*` directory; this doc moved from
+  `docs/009-frontend-stack/` to `docs/010-frontend-stack/` in the merge.
+- Burn-in port: `protection.test.js`'s "older ryuod" cases build the fake with `legacy: true`, which
+  step 5 had removed. The harness keeps `legacy`, narrowed to a ryuod from before burn-in
+  protection (no `config.burnInProtection`, no `display.protection`, no
+  `POST /api/display/protection`, overlay edits applied under the mirror); it still sends the
+  panel, tray and desktop sections, which the page needs.
+- Burn-in port: `Config.burnInProtection` and `DisplayStatus.protection` are optional in
+  `api-types.ts`. The page hides the card and the hero chip without them, as the old page's
+  `syncProtection` did; it is the one place the page still copes with an older ryuod.
+- Burn-in port: the switch's POST holds the config key `burnInProtection`, so the poll leaves both
+  `AppState.protection.enabled` and `config.burnInProtection` alone meanwhile; the receiver's
+  report is taken from every poll, held or not (`protection.ts` `protectionFrom`).
+- Burn-in port: the fake ryuod now answers an overlay POST under the mirror with `heldByDisplay`,
+  as ryuod does; no existing test's expectation changed.

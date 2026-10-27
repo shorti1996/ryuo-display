@@ -70,8 +70,11 @@ export class RyuoOverlayTab extends RyuoElement {
   }
 
   protected override render() {
-    const config = this.app?.store.state.config ?? null;
+    const state = this.app?.store.state;
+    const config = state?.config ?? null;
+    // ryuod saves overlay edits under the second display and sends them when it stops.
     return html`<div class="card main-col" id="slotCard">
+        <p class="note mirror-held" id="overlayMirrorNote" ?hidden=${!state?.displayWant}>The panel shows the desktop, with no stats overlay. Changes here are saved and applied when the second display stops.</p>
         <ryuo-slot-picker .app=${this.app}></ryuo-slot-picker>
         <p class="note">Hover a slot to find it on the panel. Positions are fixed by the firmware; choose a stat's position by choosing its slot. "Fan Speed" items draw any label with the unit RPM. The overlay hides for about 2 s every 5 min (device burn-in protection).</p>
         <p class="note" id="geometryNote">Slot geometry from HomeUI's layout; values from the last sample.</p>

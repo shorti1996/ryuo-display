@@ -11,6 +11,7 @@ import {
   NOT_AVAILABLE,
   pointerText,
 } from "../display.ts";
+import { protectionStatus } from "../protection.ts";
 import type { AppState } from "../state.ts";
 import { RyuoElement } from "./ryuo-element.ts";
 
@@ -18,8 +19,8 @@ const DOT_ICON = html`<svg aria-hidden="true" width="16" height="16" viewBox="0 
 
 /**
  * The Desktop mirror tab: the second-display switch with its status, error and retry, how to
- * place the virtual monitor, the mouse pointer's screen-share choice, and the requirements.
- * The host is the tab panel.
+ * place the virtual monitor, the mouse pointer's screen-share choice, burn-in protection, and
+ * the requirements. The host is the tab panel.
  */
 export class RyuoMirrorTab extends RyuoElement {
   static override properties: PropertyDeclarations = { asking: { state: true } };
@@ -94,14 +95,55 @@ export class RyuoMirrorTab extends RyuoElement {
     </div>`;
   }
 
+  /** The switch: on goes out at once; off asks first, and Turn off takes the focus. */
+  #toggleProtection(): void {
+    if (this.app?.actions.toggleProtection()) this.querySelector<HTMLElement>("#protTurnOff")?.focus();
+  }
+
+  #cancelProtection(): void {
+    this.app?.actions.cancelProtection();
+    this.querySelector<HTMLElement>("#protSwitch")?.focus();
+  }
+
+  /** Burn-in protection: hidden for a ryuod without the setting (AppState.protection null). */
+  #protection(state: AppState | undefined) {
+    const protection = state?.protection ?? null;
+    // Before the first poll the card is hidden; its parts start as the old page's markup did.
+    const enabled = protection?.enabled ?? true;
+    const sending = !!state?.editing.has("burnInProtection");
+    return html`<div class="card stack" id="protCard" style="gap: 10px" ?hidden=${!protection}>
+      <h3>Burn-in protection</h3>
+      <button class="big-switch" id="protSwitch" type="button" role="switch" aria-checked=${enabled ? "true" : "false"}
+        aria-describedby="protStatus" ?disabled=${sending} @click=${() => this.#toggleProtection()}>
+        <span class="lbl"><b>Protect the OLED panel</b><span id="protStatus" aria-live="polite">${protection ? protectionStatus(protection) : ""}</span></span>
+        <span class="track" aria-hidden="true"></span>
+      </button>
+      <p class="note" id="protWarn" ?hidden=${enabled}>Burn-in protection is off. Windows left on screen for hours can leave a permanent mark on the OLED panel.</p>
+      <div id="protAsk" ?hidden=${!state?.protectionAsking}>
+        <p>Turn off burn-in protection? Windows left on screen for hours can leave a permanent mark on the OLED panel.</p>
+        <div class="row"><button class="btn primary" id="protTurnOff" type="button" @click=${() => this.app?.actions.sendProtection(false)}>Turn off</button><button
+          class="btn" id="protCancel" type="button" @click=${() => this.#cancelProtection()}>Cancel</button></div>
+      </div>
+      <div class="lines">
+        <p>Only while the panel shows the desktop. The picture shifts by up to 4 px every 3 min, and goes black for 2 s every 5 min.</p>
+        <p>After 3 min without a change on the desktop the panel dims to 40 % of your brightness, at most 15 % of full; after 10 min it goes black.</p>
+        <p>A window, video or pointer move wakes it at once; a blinking cursor or a clock does not. Your windows and the virtual monitor stay as they are.</p>
+      </div>
+    </div>`;
+  }
+
   protected override render() {
+    const state = this.app?.store.state;
     return html`<div class="card main-col stack" style="gap: 16px" id="displaySection">${this.#switch()}</div>
-      <div class="card side-col" style="gap: 10px">
-        <h3>Requirements</h3>
-        <div class="req">${DOT_ICON}<span>KDE Plasma on Wayland</span></div>
-        <div class="req">${DOT_ICON}<span>krfb installed</span></div>
-        <div class="req">${DOT_ICON}<span>NVIDIA GPU</span></div>
-        <p class="note">ryuod does not check these yet; a missing one shows as an error when the display starts.</p>
+      <div class="side-col">
+        ${this.#protection(state)}
+        <div class="card stack" style="gap: 10px">
+          <h3>Requirements</h3>
+          <div class="req">${DOT_ICON}<span>KDE Plasma on Wayland</span></div>
+          <div class="req">${DOT_ICON}<span>krfb installed</span></div>
+          <div class="req">${DOT_ICON}<span>NVIDIA GPU</span></div>
+          <p class="note">ryuod does not check these yet; a missing one shows as an error when the display starts.</p>
+        </div>
       </div>`;
   }
 }
