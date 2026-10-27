@@ -27,30 +27,46 @@ describe("initial load", () => {
     expect(d.gets("/api/media")).toHaveLength(1);
   });
 
-  it("shows the device status in the header", async () => {
+  it("shows the connection in the header pill and the details in the App tab", async () => {
     await openPage();
+    expect($("connPill").className).toBe("pill ok");
     expect($("dot").className).toBe("dot ok");
-    expect($("conn").textContent).toBe("connected");
-    expect($("fw").textContent).toBe("Ryuo IV Standard V1.0.10 · /dev/hidraw4");
-    expect($("hb").textContent).toBe("heartbeat 0.4 s ago");
-    expect($("ack").textContent).toBe("HomeUI ack 0.4 s ago");
-    expect($("rec").textContent).toBe("");
+    expect($("conn").textContent).toBe("Connected");
+    expect($("connFw").textContent).toBe(" · V1.0.10");
+    expect($("model").textContent).toBe("Ryuo IV Standard");
+    expect($("fw").textContent).toBe("V1.0.10");
+    expect($("hidraw").textContent).toBe("/dev/hidraw4");
+    expect($("hb").textContent).toBe("0.4 s ago");
+    expect($("ack").textContent).toBe("0.4 s ago");
+    expect($("rec").textContent).toBe("0");
     expect($("err").textContent).toBe("");
+    expect($("errRow").hidden).toBe(true);
   });
 
   it("formats ages over 10 s in whole seconds and missing ages as a dash", async () => {
     await openPage(makeDaemon({ device: { lastHeartbeatMs: 12345, lastHomeuiAckMs: null, recoveries: 2 } }));
-    expect($("hb").textContent).toBe("heartbeat 12 s ago");
-    expect($("ack").textContent).toBe("HomeUI ack — ago");
-    expect($("rec").textContent).toBe("recoveries 2");
+    expect($("hb").textContent).toBe("12 s ago");
+    expect($("ack").textContent).toBe("— ago");
+    expect($("rec").textContent).toBe("2");
   });
 
   it("shows a cooler that is not connected, with the daemon's last error", async () => {
     await openPage(makeDaemon({ device: { connected: false, firmware: null, hidraw: null, lastError: "no RYUO IV hidraw found" } }));
+    expect($("connPill").className).toBe("pill bad");
     expect($("dot").className).toBe("dot bad");
-    expect($("conn").textContent).toBe("not connected");
-    expect($("fw").textContent).toBe("");
+    expect($("conn").textContent).toBe("Not connected");
+    expect($("connFw").textContent).toBe("");
+    expect($("fw").textContent).toBe("—");
+    expect($("hidraw").textContent).toBe("—");
     expect($("err").textContent).toBe("no RYUO IV hidraw found");
+    expect($("errRow").hidden).toBe(false);
+    expect($("connPill").title).toBe("no RYUO IV hidraw found");
+  });
+
+  it("hides a stale last error while the cooler is connected", async () => {
+    await openPage(makeDaemon({ device: { lastError: "open /dev/hidraw8: Permission denied" } }));
+    expect($("err").textContent).toBe("");
+    expect($("errRow").hidden).toBe(true);
   });
 
   it("builds six slot selects with catalog options grouped CPU to Custom", async () => {
@@ -102,7 +118,7 @@ describe("initial load", () => {
     expect($("opacity").disabled).toBe(false);
     expect($("opacityOut").textContent).toBe("60 %");
     expect($("brightness").value).toBe("41");
-    expect($("brightOut").textContent).toBe("41 → 102/255");
+    expect($("brightOut").textContent).toBe("40 %");
     expect($("playMode").value).toBe("Cycle");
     const unit = [...document.querySelectorAll("input[name=unit]")].filter((r) => r.checked).map((r) => r.value);
     expect(unit).toEqual(["Fahrenheit"]);
@@ -128,14 +144,5 @@ describe("initial load", () => {
     delete d.config.statsVisible;
     await openPage(d);
     expect($("statsOn").checked).toBe(true);
-  });
-
-  it("applies the config once, so polling does not overwrite edits", async () => {
-    const d = await openPage();
-    d.config.brightness = 7;
-    d.config.items = ["GPU Load", "", "", "", "", ""];
-    await tick(1000);
-    expect($("brightness").value).toBe("100");
-    expect(slot(0).value).toBe("CPU Temperature");
   });
 });

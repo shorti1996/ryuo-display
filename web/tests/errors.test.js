@@ -56,10 +56,13 @@ describe("API errors", () => {
     d.replyOnce("GET /api/state", { status: 200, body: { ok: false, error: "state unreadable" } });
     await tick(1000);
     expect($("dot").className).toBe("dot bad");
-    expect($("conn").textContent).toBe("daemon unreachable");
+    expect($("conn").textContent).toBe("Daemon unreachable");
     expect($("err").textContent).toBe("state unreadable");
+    expect($("standbyView").hidden).toBe(false);
+    expect($("standbyText").textContent).toBe("state unreadable");
     await tick(1000);
-    expect($("conn").textContent).toBe("connected");
+    expect($("conn").textContent).toBe("Connected");
+    expect($("standbyView").hidden).toBe(true);
     expect($("err").textContent).toBe("");
   });
 
@@ -77,7 +80,7 @@ describe("daemon down", () => {
     d.down = true;
     await tick(1000);
     expect($("dot").className).toBe("dot bad");
-    expect($("conn").textContent).toBe("daemon unreachable");
+    expect($("conn").textContent).toBe("Daemon unreachable");
     expect($("err").textContent).toBe("Failed to fetch");
     const before = d.gets("/api/state").length;
     await tick(3000);
@@ -92,7 +95,7 @@ describe("daemon down", () => {
     d.down = false;
     await tick(1000);
     expect($("dot").className).toBe("dot ok");
-    expect($("conn").textContent).toBe("connected");
+    expect($("conn").textContent).toBe("Connected");
     expect($("err").textContent).toBe("");
   });
 
@@ -112,13 +115,13 @@ describe("daemon down", () => {
     const d = makeDaemon({ config: { brightness: 77 } });
     d.down = true;
     await openPage(d);
-    expect($("conn").textContent).toBe("daemon unreachable");
+    expect($("conn").textContent).toBe("Daemon unreachable");
     expect($("result").textContent).toBe("Media list: Failed to fetch");
     expect($("brightOut").textContent).toBe("");
 
     d.down = false;
     await tick(1000);
-    expect($("conn").textContent).toBe("connected");
+    expect($("conn").textContent).toBe("Connected");
     expect($("brightness").value).toBe("77");
     expect(slot(0).value).toBe("CPU Temperature");
     expect($("ps1").classList.contains("hidden")).toBe(false);
@@ -143,7 +146,7 @@ describe("daemon down", () => {
     await openPage(d);
     d.down = false;
     await tick(5000);
-    const names = [...$("media").querySelectorAll("input[type=checkbox]")].map((b) => b.value);
-    expect(names).toEqual([...PRESET, ...CUSTOM]);
+    const names = [...document.querySelectorAll(".tile")].map((t) => t.dataset.name);
+    expect(names).toEqual([...CUSTOM, ...PRESET]);
   });
 });
