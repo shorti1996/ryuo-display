@@ -258,13 +258,24 @@ def close_fd(fd):
 
 FAKE_DISPLAY = textwrap.dedent(
     """\
-    import os, signal, sys, time
+    import os, signal, sys, threading, time
     here = sys.argv[1]
-    def note(text):
-        with open(os.path.join(here, "events"), "a") as f:
-            f.write(text + "\\n")
+    def note(text, name="events"):
+        with open(os.path.join(here, name), "a") as out:
+            out.write(text + "\\n")
     mode = open(os.path.join(here, "mode")).read().split()
+    note(" ".join(sys.argv[2:]), "argv")
     note("start " + os.environ.get("WAYLAND_DISPLAY", "-"))
+    # Plays the receiver's side of the burn-in protection: --protection and the stdin lines decide
+    # the state it reports, as RyuoDisplay.Protection would after the control message.
+    protect = "--protection" not in sys.argv or sys.argv[sys.argv.index("--protection") + 1] == "on"
+    def control():
+        global protect
+        for line in sys.stdin:
+            note(line.strip(), "stdin")
+            if line.split()[:1] == ["protection"]:
+                protect = line.split()[1] == "on"
+    threading.Thread(target=control, daemon=True).start()
     def term(*_):
         note("sigterm")
         if "ignore-term" in mode:
@@ -294,13 +305,18 @@ FAKE_DISPLAY = textwrap.dedent(
         print("pointer: shown", flush=True)
     time.sleep(0.3)
     print("streaming to the panel at 10 Mb/s; stop with Ctrl-C", flush=True)
-    n = 0
+    ticks = 0
     while True:
         time.sleep(0.05)
-        n += 1
+        ticks += 1
         print("sent 59.8 fps, 9.7 Mb/s", flush=True)
         print("ryuo-display: 59.6 fps", flush=True)
-        if "die" in mode and n == 3:
+        if protect:
+            print("ryuo-display: protection state=active idle=%d shift=179" % ticks, flush=True)
+        else:
+            print("ryuo-display: protection state=off idle=%d" % ticks, flush=True)
+        print("ryuo-display: frames n=3 floor=4990 small=2 smallMax=85 big=1 bigMin=14020 rapid=0", flush=True)
+        if "die" in mode and ticks == 3:
             print("error: stream to the panel failed: [Errno 32] Broken pipe", flush=True)
             sys.exit(1)
     """
@@ -342,6 +358,16 @@ class FakeDisplayChild:
 
     def starts(self):
         return [e for e in self.events() if e.startswith("start")]
+
+    def argv(self):
+        """The arguments of each start after the fake's own directory, one string per start."""
+        path = self.dir / "argv"
+        return path.read_text().splitlines() if path.exists() else []
+
+    def stdin(self):
+        """The lines every start so far read from its stdin."""
+        path = self.dir / "stdin"
+        return path.read_text().splitlines() if path.exists() else []
 
     def close(self):
         for s in self.sockets:

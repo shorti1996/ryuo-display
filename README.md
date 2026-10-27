@@ -1,6 +1,6 @@
 # rog-ryuo-lcd
 
-Linux software for the 2240×1080 LCD on the pump of the ASUS ROG RYUO IV AIO cooler. It replaces
+Linux software for the 2240×1080 OLED panel on the pump of the ASUS ROG RYUO IV AIO cooler. It replaces
 the Windows app for the screen: it plays videos stored on the cooler and draws live PC stats
 (CPU, GPU, memory, disk, network, clock) over them, refreshed once per second. The panel shows
 its standby video whenever no program has sent it a message for 5 s, so the daemon runs all the
@@ -89,7 +89,7 @@ The two parts start at different times:
 | Brightness | 0–102 on the device's scale: 100 gives 250/255 backlight, 102 gives the full 255/255 |
 | Background media | the videos and images already on the cooler, play mode (Single, Cycle, Random). Play restarts the video. |
 | Units | °C or °F, and the memory frequency in MHz (Linux has no unprivileged source for it; 0 hides that stat) |
-| Second display | a switch that shows a virtual monitor of the desktop on the panel, and its state: off, starting, on with the frames/s and Mb/s sent, stopping, or the error with the next retry in seconds |
+| Second display | a switch that shows a virtual monitor of the desktop on the panel, and its state: off, starting, on with the frames/s and Mb/s sent, stopping, or the error with the next retry in seconds; a switch for burn-in protection |
 
 Settings are saved in `~/.config/ryuo/state.json` and restored when the daemon starts.
 
@@ -150,9 +150,18 @@ again. To be asked again on the next start, press **Ask again** on the page, whi
   the last one.
 - Brightness keeps working, and the daemon keeps its heartbeat going. Without it the panel would drop
   to standby and to 50/255 backlight.
-- While it streams, the daemon swaps the background video for a black image, `display-black.png`, which
-  lets the cooler decode the desktop at up to about 90 frames/s instead of about 70. Your selected
-  background comes back when display mode stops.
+- While it streams, the daemon swaps the background video for a black image, `display-black.png`, with
+  the stats overlay off, which lets the cooler decode the desktop at up to about 90 frames/s instead of
+  about 70. Your selected background and overlay come back when display mode stops.
+- **Burn-in protection** (on by default, a switch on the page) guards the OLED panel against a desktop
+  that stays the same for hours. Every 3 min the picture moves to the next of 8 positions within 4 px
+  of the centre. After 3 min without a real change it fades to 40 % of the current brightness, and to
+  no more than 15 % of full; after 10 min it fades to black. Every 5 min it goes black for 2 s, unless it
+  is already dimmed. Moving the pointer on the panel or any larger change brings the picture back at
+  once; a blinking text cursor or a clock does not. The receiver on the cooler runs these timers, so
+  they go on while the PC sleeps or the stream stalls. Turning the switch off or on applies within
+  about a second, without restarting display mode. The backlight setting is never changed: the dimming
+  draws the picture darker. The page shows the protection's state (active, dimmed, black, refresh).
 - Turning it off removes the virtual monitor, which takes up to about 10 s; windows on it move to the
   main monitor. The panel then shows the background video again.
 - The switch is saved in `state.json`. When the daemon starts with it on, display mode starts again,
@@ -215,6 +224,7 @@ tested here; only H.264 MP4 files have been played on the test unit.
 | Second display: "no Wayland session yet" | The daemon found no `wayland-N` socket in `$XDG_RUNTIME_DIR`: Plasma has not started yet (it retries), or the session is X11, which display mode does not support. |
 | Second display: "no PipeWire stream for Virtual-RYUO after 10 s" | KWin did not start the virtual monitor's screencast stream. Seen once on the test machine, where the journal showed `kwin_wayland: GL_OUT_OF_MEMORY ... Failed to allocate memory for texture`; the retry 5 s later worked. |
 | Second display: "krfb-virtualmonitor already serves Virtual-RYUO" | Another `ryuo_display.py` is running, for example one started from a terminal or one still stopping. The daemon retries; stop the other one if it keeps running. |
+| Second display: the panel dims or goes black while I read | Burn-in protection: 3 min without a real change dims it, 10 min blacks it. Move the pointer on the panel to bring it back, or turn **Burn-in protection** off on the page. |
 | Second display: "no cooler on adb" or "missing programs" | Not retried by itself. Check `adb devices` or run `make deps`, then press **Try again now**. |
 | After display mode the panel says "Can't play this video.", or display mode never shows a first frame | The cooler's hardware decoder was left allocated, usually because the receiver was killed before it released it. Run `adb shell setprop ctl.restart android-hardware-media-c2-hal-1-1`. If it happens after stopping `ryuod.service`, the installed unit predates `KillMode=mixed`, which makes systemd signal only the daemon so it can stop display mode in order: run `make install` again. |
 | Cooler not found on another firmware | The HID interface is matched by product ID `1c76` with vendor `0b05` (firmware 1.0.3 and 1.0.10) or `1c75` (firmware 1.0.7, per other projects). Only V1.0.10 has been tested. `lsusb` shows the IDs your unit reports; the test unit lists `0b05:1c76 ASUSTek Computer, Inc. ROG RYUO IV Standard`. |
@@ -265,6 +275,7 @@ done.
 | `70-rog-ryuo-iv.rules` | the udev rule |
 | `docs/001-lcd-protocol/` | the reverse-engineered HID protocol: frame format, commands, device quirks |
 | `docs/002-stats-prototype/` | daemon design: stat sources, overlay slots, startup and reconnect sequence, HTTP API |
+| `docs/009-burn-in/` | the second display's burn-in protection: timers, what counts as a change, how to tune it |
 | `re/` | local reverse-engineering material (vendor APKs, decompiled sources, screenshots); git-ignored |
 
 How the protocol works, in short: video files go to the cooler over adb; commands go over a HID

@@ -18,16 +18,22 @@ import ryuod
 
 
 class SwitchDisplay:
-    """ryuod.Display reduced to its switch: records set() and reports a fixed status."""
+    """ryuod.Display reduced to its switch: records set() and set_protection() and reports a fixed
+    status."""
 
     def __init__(self):
         self.wanted = []
+        self.protection = []  # (on, backlight share) per set_protection()
 
     def set(self, on):
         self.wanted.append(on)
 
+    def set_protection(self, on, backlight):
+        self.protection.append((on, backlight))
+
     def status(self):
         on = bool(self.wanted and self.wanted[-1])
+        enabled = self.protection[-1][0] if self.protection else True
         return {
             "on": on,
             "state": "starting" if on else "off",
@@ -36,6 +42,7 @@ class SwitchDisplay:
             "message": None,
             "error": None,
             "retryInS": None,
+            "protection": {"enabled": enabled, "state": None, "idleS": None, "nextShiftS": None, "frames": None},
         }
 
 
@@ -384,6 +391,20 @@ def test_overlay_unacked(api):
     assert body["applied"] is True and body["acked"] is False
 
 
+def test_overlay_under_the_second_display_is_saved_not_sent(api):
+    # HomeUI shows plain black under the receiver's layer; restore() sends the overlay later.
+    api.d.backdrop.on = True
+    status, _, body = api.post("/api/overlay", {"statsVisible": False, "items": ["CPU Load"]})
+    assert status == 200
+    assert (body["applied"], body["heldByDisplay"], body["sent"]) == (False, True, [])
+    assert api.sent == []
+    assert api.disk_state()["items"] == ["CPU Load", "", "", "", "", ""]
+    assert api.disk_state()["statsVisible"] is False
+    api.d.backdrop.on = False
+    status, _, body = api.post("/api/overlay", {"statsVisible": True})
+    assert body["heldByDisplay"] is False and body["sent"] == ["POST preset"]
+
+
 def test_overlay_frame_too_large_is_400(api):
     api.d.device.result = {"applied": False, "acked": False, "error": "preset: frame is 1100 bytes, limit 1024"}
     status, _, body = api.post("/api/overlay", {"titleColor": "#123456"})
@@ -411,6 +432,8 @@ def test_brightness(api, value, level, percent):
     }
     assert api.sent == [("POST", "brightness", {"value": value})]
     assert api.disk_state()["brightness"] == value
+    # The receiver dims from the backlight the new value gives.
+    assert api.d.display.protection == [(True, level / 255)]
 
 
 @pytest.mark.parametrize("value", [103, -1, 50.5, "50", True, None])
@@ -626,6 +649,75 @@ def test_display_end_to_end_with_a_fake_child(api, tmp_path, monkeypatch):
         assert api.post("/api/display", {"on": False})[0] == 200
         wait_until(lambda: api.get("/api/state")[2]["display"]["state"] == "off", what="off")
         assert child.events()[-2:] == ["sigterm", "clean exit"]
+    finally:
+        assert api.d.display.stop(10)
+        child.close()
+
+
+# ---------------------------------------------------------------- POST /api/display/protection
+
+
+def test_state_reports_burn_in_protection(api):
+    _, _, body = api.get("/api/state")
+    assert body["config"]["burnInProtection"] is True
+    assert body["display"]["protection"] == {
+        "enabled": True, "state": None, "idleS": None, "nextShiftS": None, "frames": None,
+    }
+
+
+def test_protection_off_and_on_is_saved_and_passed_on(api):
+    api.post("/api/brightness", {"value": 40})
+    status, _, body = api.post("/api/display/protection", {"enabled": False})
+    assert status == 200
+    assert body["ok"] is True
+    assert body["protection"]["enabled"] is False
+    assert body["config"]["burnInProtection"] is False
+    assert api.disk_state()["burnInProtection"] is False
+    assert api.d.display.protection[-1] == (False, 100 / 255)
+    assert api.sent == [("POST", "brightness", {"value": 40})]  # nothing else goes to the cooler
+    assert api.d.display.wanted == []  # the second display is not switched or restarted
+
+    status, _, body = api.post("/api/display/protection", {"enabled": True})
+    assert status == 200
+    assert body["config"]["burnInProtection"] is True
+    assert api.d.display.protection[-1] == (True, 100 / 255)
+    assert api.get("/api/state")[2]["config"]["burnInProtection"] is True
+
+
+@pytest.mark.parametrize("body", [{}, {"enabled": "no"}, {"enabled": 0}, {"enabled": None}, {"on": False}])
+def test_protection_rejects(api, body):
+    before = api.disk_state()
+    status, _, reply = api.post("/api/display/protection", body)
+    assert status == 400
+    assert reply == {"ok": False, "error": "enabled must be true or false"}
+    assert api.d.display.protection == []
+    assert api.disk_state() == before
+
+
+def test_protection_without_a_supervisor_is_saved(api):
+    api.d.display = None
+    status, _, body = api.post("/api/display/protection", {"enabled": False})
+    assert status == 200
+    assert body["protection"] == {"enabled": False, "state": None, "idleS": None, "nextShiftS": None, "frames": None}
+    assert api.disk_state()["burnInProtection"] is False
+
+
+def test_protection_end_to_end_with_a_fake_child(api, tmp_path, monkeypatch):
+    monkeypatch.setattr(ryuod, "log", lambda msg: None)
+    child = FakeDisplayChild(tmp_path)
+    child.listen("wayland-0")
+    child.listen("bus")
+    api.d.display = make_display(child)
+    try:
+        api.d.sync_protection()
+        assert api.post("/api/display", {"on": True})[0] == 200
+        wait_until(lambda: api.get("/api/state")[2]["display"]["protection"]["state"] == "active", what="active")
+        assert api.post("/api/display/protection", {"enabled": False})[0] == 200
+        wait_until(lambda: api.get("/api/state")[2]["display"]["protection"]["state"] == "off", what="off")
+        assert api.post("/api/brightness", {"value": 40})[0] == 200
+        wait_until(lambda: child.stdin()[-1:] == ["backlight 0.392"], what="the backlight on stdin")
+        assert child.argv() == ["--control-stdin --protection on --backlight 0.980"]
+        assert len(child.starts()) == 1
     finally:
         assert api.d.display.stop(10)
         child.close()

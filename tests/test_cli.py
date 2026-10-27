@@ -336,18 +336,24 @@ class FakeThread:
 
 
 class FakeDisplay:
-    """ryuod.Display without a child process; records the switch and the order of shutdown."""
+    """ryuod.Display without a child process; records the switch, the burn-in setting and the order
+    of shutdown."""
 
     def __init__(self, events, **kw):
         self.events, self.kw = events, kw
         self.started = False
         self.wanted = []
+        self.protection = []
 
     def start(self):
         self.started = True
 
     def set(self, on):
         self.wanted.append(on)
+
+    def set_protection(self, on, backlight):
+        self.protection.append((on, backlight))
+        self.events.append(("display protection", on, backlight))
 
     def status(self):
         return {"on": bool(self.wanted and self.wanted[-1]), "state": "on" if self.wanted and self.wanted[-1] else "off"}
@@ -441,6 +447,18 @@ def test_ryuod_main_restores_second_display(daemon_main, monkeypatch):
     display = daemon_main["display"]
     assert display.started and display.wanted == [True]
     assert any("switch saved on" in m for m in daemon_main["log"])
+    # The saved burn-in setting and backlight reach the display before its first start.
+    assert display.protection == [(True, 250 / 255)]
+
+
+def test_ryuod_main_passes_the_saved_burn_in_setting(daemon_main, monkeypatch):
+    monkeypatch.setattr(P, "superseded", lambda: False)
+    monkeypatch.setattr(P, "running_driver", lambda: None)
+    os.makedirs(os.path.dirname(daemon_main["state"]))
+    with open(daemon_main["state"], "w") as state_file:
+        json.dump({"burnInProtection": False, "brightness": 40}, state_file)
+    run_main_until_sigterm(daemon_main)
+    assert daemon_main["display"].protection == [(False, 100 / 255)]
 
 
 def test_ryuod_main_stops_second_display_before_the_device(daemon_main, monkeypatch):
@@ -456,7 +474,11 @@ def test_ryuod_main_stops_second_display_before_the_device(daemon_main, monkeypa
     run_main_until_sigterm(daemon_main)
     # The heartbeat keeps HomeUI out of standby while ryuo_display.py tears down, which takes
     # about 10 s; it is never cut short.
-    assert daemon_main["events"] == [("display stop", ryuod.DISPLAY_STOP_S + 5), ("device stop", True)]
+    assert daemon_main["events"] == [
+        ("display protection", True, 250 / 255),
+        ("display stop", ryuod.DISPLAY_STOP_S + 5),
+        ("device stop", True),
+    ]
 
 
 def test_ryuod_main_display_cooler_token(daemon_main, monkeypatch):

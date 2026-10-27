@@ -126,6 +126,7 @@ def test_off_until_switched_on(fake, displays):
         "pointer": None,
         "backgroundError": None,
         "retryInS": None,
+        "protection": {"enabled": True, "state": None, "idleS": None, "nextShiftS": None, "frames": None},
     }
 
 
@@ -293,6 +294,109 @@ def test_stop_without_a_child_returns_at_once(fake):
     t0 = time.monotonic()
     assert d.stop(5)
     assert time.monotonic() - t0 < 1
+
+
+# ---------------------------------------------------------------- burn-in protection
+
+
+@pytest.mark.parametrize(
+    "line, status",
+    [
+        ("ryuo-display: protection state=active idle=12 shift=97", {"state": "active", "idleS": 12, "nextShiftS": 97}),
+        ("ryuo-display: protection state=dimmed idle=200 shift=0", {"state": "dimmed", "idleS": 200, "nextShiftS": 0}),
+        ("ryuo-display: protection state=refresh idle=4 shift=60", {"state": "refresh", "idleS": 4, "nextShiftS": 60}),
+        ("ryuo-display: protection state=off idle=3", {"state": "off", "idleS": 3, "nextShiftS": None}),
+        ("ryuo-display: protection state=black", None),
+        ("ryuo-display: 59.6 fps", None),
+        ("protection state=active idle=1 shift=2", None),
+    ],
+)
+def test_display_protection(line, status):
+    assert ryuod.display_protection(line) == status
+
+
+def test_display_frames():
+    line = "ryuo-display: frames n=40 floor=4990 small=39 smallMax=85 big=1 bigMin=-1 rapid=2"
+    assert ryuod.display_frames(line) == {
+        "n": 40,
+        "floor": 4990,
+        "small": 39,
+        "smallMax": 85,
+        "big": 1,
+        "bigMin": -1,
+        "rapid": 2,
+    }
+    assert ryuod.display_frames("ryuo-display: frames") is None
+    assert ryuod.display_frames("ryuo-display: first frame, layer shown") is None
+
+
+def test_child_starts_with_the_protection_setting_and_control_on_stdin(fake, displays):
+    display = make(fake)
+    displays.append(display)
+    display.set_protection(False, 0.392)
+    display.set(True)
+    wait_until(state_is(display, "on"))
+    assert fake.argv() == ["--control-stdin --protection off --backlight 0.392"]
+    assert fake.stdin() == []  # nothing changed after the start
+
+
+def test_toggle_and_brightness_reach_the_running_child(fake, displays, logs):
+    display = make(fake)
+    displays.append(display)
+    display.set_protection(True, 0.98)
+    display.set(True)
+    wait_until(lambda: display.status()["protection"]["state"] == "active", what="the receiver's first report")
+    st = display.status()["protection"]
+    assert st["enabled"] is True and st["nextShiftS"] == 179 and st["idleS"] >= 0
+    assert st["frames"] == {"n": 3, "floor": 4990, "small": 2, "smallMax": 85, "big": 1, "bigMin": 14020, "rapid": 0}
+
+    display.set_protection(False, 0.98)
+    assert display.status()["protection"]["enabled"] is False
+    wait_until(lambda: fake.stdin() == ["protection off", "backlight 0.980"], what="the toggle on stdin")
+    wait_until(lambda: display.status()["protection"]["state"] == "off", what="the receiver's off report")
+    assert display.status()["protection"]["nextShiftS"] is None
+
+    display.set_protection(False, 0.5)
+    wait_until(lambda: fake.stdin()[-2:] == ["protection off", "backlight 0.500"], what="the backlight on stdin")
+    display.set_protection(False, 0.5)  # unchanged: nothing written
+    time.sleep(0.2)
+    assert len(fake.stdin()) == 4
+    assert len(fake.starts()) == 1  # applied without a restart
+
+    # The receiver's lines are not the child's message, and only state changes reach the log.
+    assert display.status()["message"] == "streaming to the panel at 10 Mb/s; stop with Ctrl-C"
+    states = [message for message in logs if "protection state=" in message]
+    assert [message.split("state=")[1].split()[0] for message in states] == ["active", "off"]
+    assert not any("frames n=" in message for message in logs)
+    assert not any("protection" in line for line in display.tail)
+
+    display.set(False)
+    wait_until(state_is(display, "off"))
+    assert display.status()["protection"] == {
+        "enabled": False,
+        "state": None,
+        "idleS": None,
+        "nextShiftS": None,
+        "frames": None,
+    }
+
+
+def test_a_change_while_off_goes_to_the_next_start(fake, displays):
+    display = make(fake)
+    displays.append(display)
+    display.set_protection(True, 1.0)
+    display.set(True)
+    wait_until(state_is(display, "on"))
+    display.set(False)
+    wait_until(state_is(display, "off"))
+    display.set_protection(False, 0.2)
+    display.set(True)
+    wait_until(state_is(display, "on"))
+    assert fake.argv() == [
+        "--control-stdin --protection on --backlight 1.000",
+        "--control-stdin --protection off --backlight 0.200",
+    ]
+    assert fake.stdin() == []
 
 
 # ---------------------------------------------------------------- failures

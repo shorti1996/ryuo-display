@@ -89,6 +89,8 @@ def test_streaming_switches_homeui_to_the_pushed_black_image(rig):
     assert (method, cmd) == ("POST", "waterBlockScreenId")
     assert cfg == ryuod.black_config(rig.d.state.get())
     assert (cfg["media"], cfg["playMode"]) == ([ryuod.BLACK_NAME], "Single")
+    # Plain black: no stats overlay over the edge the receiver's shift uncovers, or under its dimming.
+    assert cfg["sysinfoDisplay"] == [""] * 6
     assert rig.d.device.media["custom"] == [*CUSTOM, ryuod.BLACK_NAME]
     assert rig.d.device.media["sizes"][ryuod.BLACK_NAME] == len(M.black_png())
     # In memory only: the saved selection stays the user's.
@@ -116,6 +118,7 @@ def test_turning_display_mode_off_restores_the_saved_media(rig):
     wait_until(state_is(display, "off"))
     assert rig.screens() == [[ryuod.BLACK_NAME], [CUSTOM[0], PRESET[1]]]
     assert rig.d.device.sent[-1][2] == rig.user_config()
+    assert rig.d.device.sent[-1][2]["sysinfoDisplay"] == ryuod.DEFAULT_ITEMS  # the overlay is back
     assert rig.d.backdrop.on is False
 
 

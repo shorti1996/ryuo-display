@@ -22,6 +22,7 @@ def test_defaults():
     a = D.parse_args([])
     assert (a.bitrate, a.scale, a.name, a.port, a.serial, a.verbose) == (10, None, "RYUO", 27183, None, False)
     assert (a.no_pointer, a.dialog_timeout) == (False, D.DIALOG_TIMEOUT)
+    assert (a.protection, a.backlight, a.control_stdin) == ("on", 1.0, False)
 
 
 @pytest.mark.parametrize(
@@ -39,6 +40,9 @@ def test_defaults():
         ["--port", "80"],
         ["--port", "70000"],
         ["--dialog-timeout", "0"],
+        ["--protection", "yes"],
+        ["--backlight", "1.5"],
+        ["--backlight", "-0.1"],
     ],
 )
 def test_bad_arguments_exit_2(argv, capsys):
@@ -57,6 +61,9 @@ def test_bad_arguments_exit_2(argv, capsys):
         (["--scale", "2"], "scale", 2),
         (["--name", "Pump_LCD-2"], "name", "Pump_LCD-2"),
         (["-s", "TC25"], "serial", "TC25"),
+        (["--protection", "off"], "protection", "off"),
+        (["--backlight", "0.392"], "backlight", 0.392),
+        (["--control-stdin"], "control_stdin", True),
     ],
 )
 def test_good_arguments(argv, attr, value):
@@ -355,6 +362,102 @@ def test_relay_reports_a_closed_connection():
     relay.close()
     a.close()
     assert len(errors) == 1 and errors[0].startswith("stream to the panel failed")
+
+
+# ---------------------------------------------------------------- burn-in protection: the control link
+
+
+def test_control_unit_is_an_unspecified_nal_with_ascii_text():
+    unit = D.control_unit(True, 0.392)
+    assert unit[:4] == b"\0\0\0\1"
+    assert (unit[4] >> 1) & 0x3F == 48 and unit[5] == 1  # layer 0, temporal id 0
+    assert unit[6:] == b"ryuo protect=1 backlight=0.392"
+    assert D.control_unit(False, 1).endswith(b"ryuo protect=0 backlight=1.000")
+    # No zero byte after the start code, so the payload can never hold a start code.
+    assert b"\0" not in unit[4:]
+
+
+def test_control_unit_reaches_the_receiver_as_an_access_unit_of_its_own():
+    rx = ReceiverSplitter()
+    assert rx.feed(D.AUD + D.control_unit(False, 0.5) + D.AUD) == [D.AUD + D.control_unit(False, 0.5)]
+    assert rx.feed(D.panel_frame(AU1)) == [D.AUD + AU1[7:]]
+
+
+@pytest.mark.parametrize(
+    "line, changes",
+    [
+        ("protection on\n", {"protect": True}),
+        ("protection off", {"protect": False}),
+        ("  backlight 0.392 \n", {"backlight": 0.392}),
+        ("backlight 0", {"backlight": 0.0}),
+        ("backlight 1", {"backlight": 1.0}),
+        ("backlight 1.2", None),
+        ("backlight -0.1", None),
+        ("backlight high", None),
+        ("protection", None),
+        ("protection maybe", None),
+        ("brightness 50", None),
+        ("", None),
+    ],
+)
+def test_parse_control(line, changes):
+    assert D.parse_control(line) == changes
+
+
+def test_read_control_applies_each_line_and_warns_about_others(capsys):
+    calls = []
+    D.read_control(["protection off\n", "backlight 0.5\n", "volume 3\n", "\n"], lambda **kw: calls.append(kw))
+    assert calls == [{"protect": False}, {"backlight": 0.5}]
+    assert capsys.readouterr().out == "warning: ignored control line 'volume 3'\n"
+
+
+def test_relay_sends_the_control_unit_first_and_changes_between_frames():
+    read_fd, write_fd = os.pipe()
+    sender, peer = socket.socketpair()
+    relay = D.Relay(sender, D.Stats(), lambda error: None, D.control_unit(True, 1.0))
+    relay.start()
+    relay.use(read_fd)
+    os.write(write_fd, gdp(D.GDP_BUFFER, AU1))
+    assert relay.first_frame.wait(5)
+    relay.first_frame.clear()
+    # The wake-up for the change is written before the next frame, and the relay handles a wake-up
+    # before reading a frame, so the change goes out between the two frames.
+    relay.control(D.control_unit(False, 1.0))
+    os.write(write_fd, gdp(D.GDP_BUFFER, AU2))
+    assert relay.first_frame.wait(5)
+    os.close(write_fd)
+    relay.close()
+    sender.close()
+    wire = received(peer)
+    assert wire == (
+        D.AUD + D.control_unit(True, 1.0) + D.AUD + AU1[7:] + D.AUD + D.control_unit(False, 1.0) + D.AUD + AU2[7:] + D.AUD
+    )
+    units = ReceiverSplitter().feed(wire)
+    assert units == [
+        D.AUD + D.control_unit(True, 1.0),
+        D.AUD + AU1[7:],
+        D.AUD + D.control_unit(False, 1.0),
+        D.AUD + AU2[7:],
+    ]
+
+
+class RecordingRelay:
+    def __init__(self):
+        self.units = []
+
+    def control(self, unit):
+        self.units.append(unit)
+
+
+def test_session_keeps_changes_until_the_stream_starts_then_sends_them():
+    session = D.Session(D.parse_args(["--protection", "off", "--backlight", "0.5"]), contextlib.ExitStack())
+    assert (session.protect, session.backlight) == (False, 0.5)
+    session.set_protection(backlight=0.25)  # no stream yet: kept for the relay's first unit
+    assert (session.protect, session.backlight) == (False, 0.25)
+    session.relay = RecordingRelay()
+    session.set_protection(protect=True)
+    session.set_protection(backlight=0.75)
+    assert session.relay.units == [D.control_unit(True, 0.25), D.control_unit(True, 0.75)]
 
 
 # ---------------------------------------------------------------- windows arriving on the output

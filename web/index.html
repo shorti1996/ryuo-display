@@ -175,6 +175,9 @@ button:disabled > .track { opacity: .5; }
 .mirror-view .win { position: absolute; border-radius: 8px; }
 .mirror-view .win::before { content: ""; display: block; height: 9%; border-radius: 8px 8px 0 0; background: #22262F; }
 .mirror-view .chip { font-family: var(--mono); background: rgba(10, 10, 12, .7); }
+/* Burn-in protection's state, top right; red while protection is off. */
+.mirror-view .chip.prot { left: auto; right: 14px; max-width: 45%; font-family: var(--ui); }
+.mirror-view .chip.prot.warn { color: var(--bad); border: 1px solid var(--bad-border); }
 /* Where KDE moves and scales the virtual monitor; a caption under the faux windows. */
 .mirror-view .caption {
   position: absolute; left: 14px; bottom: 12px; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 28px);
@@ -197,6 +200,7 @@ button:disabled > .track { opacity: .5; }
   .pvbar.asking .btn:not(.icon) { padding: 0 10px; }
   .chip, .hero-status { top: 8px; }
   .chip { left: 8px; }
+  .mirror-view .chip.prot { right: 8px; }
   .mirror-view .caption { left: 8px; bottom: 6px; max-width: calc(100% - 16px); font-size: 11px; }
   .hero-status { right: 8px; }
 }
@@ -335,6 +339,13 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
 .req { display: flex; align-items: center; gap: 10px; min-height: 32px; }
 .req svg { flex: none; color: var(--muted); }
 
+#protCard .big-switch .lbl b { font-size: 14px; }
+#protWarn, #protAsk p { color: var(--bad); }
+#protAsk { display: flex; flex-direction: column; gap: 10px; }
+#protAsk p { margin: 0; font-size: 13px; }
+#protAsk .row { display: flex; flex-wrap: wrap; gap: 8px; }
+.note.mirror-held { color: var(--text-2); }
+
 /* ---------- app tab ---------- */
 #trayCard { padding: 8px 20px; }
 .set-row {
@@ -421,6 +432,7 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
       <div class="win" aria-hidden="true" style="left: 8%; top: 14%; width: 46%; height: 60%; background: #181B22; border: 1px solid #2A2E38"></div>
       <div class="win" aria-hidden="true" style="left: 44%; top: 30%; width: 44%; height: 56%; background: #1B1F27; border: 1px solid #2E3340"></div>
       <div class="chip" id="mirrorChip">Desktop mirror · Virtual-RYUO 2240×1080</div>
+      <div class="chip prot" id="protChip" hidden></div>
       <p class="caption" id="mirrorHint"><span id="mirrorHintText">Position and scale: System Settings → Display &amp; Monitor → Display Configuration → Virtual-RYUO</span><button class="btn mini" id="mirrorSettings" type="button" aria-label="Open Display Configuration" title="Open Display Configuration" hidden>Open</button></p>
     </div>
     <div class="standby-view" id="standbyView" hidden>
@@ -461,6 +473,7 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
 
   <div role="tabpanel" id="tp-overlay" aria-labelledby="tab-overlay" class="cols">
     <div class="card main-col" id="slotCard">
+      <p class="note mirror-held" id="overlayMirrorNote" hidden>The panel shows the desktop, with no stats overlay. Changes here are saved and applied when the second display stops.</p>
       <div id="slots"></div>
       <p class="note" id="clipWarn" aria-live="polite"></p>
       <p class="note">Hover a slot to find it on the panel. Positions are fixed by the firmware; choose a stat's position by choosing its slot. "Fan Speed" items draw any label with the unit RPM. The overlay hides for about 2 s every 5 min (device burn-in protection).</p>
@@ -539,7 +552,7 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
       <div><button class="btn" id="displayRetry" type="button" hidden>Try again now</button></div>
       <div class="lines" id="displayInfo">
         <p>Adds Virtual-RYUO, a 2240×1080 virtual monitor, to the right of your main monitor. Windows dragged past its right edge appear on the panel.</p>
-        <p>The stats overlay and background video are hidden while it runs. Brightness still works.</p>
+        <p>While it runs, HomeUI shows a plain black backdrop with no stats overlay; overlay changes are saved and applied when it stops. Brightness still works.</p>
         <p>The panel gets a new frame only when something on the virtual monitor changes. Turning it off removes the virtual monitor, which takes up to about 10 s.</p>
         <p id="displaySettingsHint">To move Virtual-RYUO, use Edit Arrangement in System Settings → Display &amp; Monitor → Display Configuration; its scale is set there too (Plasma may start it at 200 %). Searching "Display Configuration" in KRunner or the app launcher opens that page.</p>
         <div id="displaySettingsRow" hidden><button class="btn" id="displaySettingsOpen" type="button">Open Display Configuration</button></div>
@@ -551,12 +564,32 @@ button.thumb:hover .play-ic, button.thumb:focus-visible .play-ic { background: r
         <p class="note" id="choiceText" hidden></p>
       </div>
     </div>
-    <div class="card side-col" style="gap: 10px">
+    <div class="side-col">
+    <!-- Hidden for a ryuod without config.burnInProtection. -->
+    <div class="card stack" id="protCard" style="gap: 10px" hidden>
+      <h3>Burn-in protection</h3>
+      <button class="big-switch" id="protSwitch" type="button" role="switch" aria-checked="true" aria-describedby="protStatus">
+        <span class="lbl"><b>Protect the OLED panel</b><span id="protStatus" aria-live="polite"></span></span>
+        <span class="track" aria-hidden="true"></span>
+      </button>
+      <p class="note" id="protWarn" hidden>Burn-in protection is off. Windows left on screen for hours can leave a permanent mark on the OLED panel.</p>
+      <div id="protAsk" hidden>
+        <p>Turn off burn-in protection? Windows left on screen for hours can leave a permanent mark on the OLED panel.</p>
+        <div class="row"><button class="btn primary" id="protTurnOff" type="button">Turn off</button><button class="btn" id="protCancel" type="button">Cancel</button></div>
+      </div>
+      <div class="lines">
+        <p>Only while the panel shows the desktop. The picture shifts by up to 4 px every 3 min, and goes black for 2 s every 5 min.</p>
+        <p>After 3 min without a change on the desktop the panel dims to 40 % of your brightness, at most 15 % of full; after 10 min it goes black.</p>
+        <p>A window, video or pointer move wakes it at once; a blinking cursor or a clock does not. Your windows and the virtual monitor stay as they are.</p>
+      </div>
+    </div>
+    <div class="card stack" style="gap: 10px">
       <h3>Requirements</h3>
       <div class="req"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="2"/></svg><span>KDE Plasma on Wayland</span></div>
       <div class="req"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="2"/></svg><span>krfb installed</span></div>
       <div class="req"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="2"/></svg><span>NVIDIA GPU</span></div>
       <p class="note">ryuod does not check these yet; a missing one shows as an error when the display starts.</p>
+    </div>
     </div>
   </div>
 
@@ -1307,6 +1340,7 @@ function renderDisplaySwitch() {
   renderPanelSwitch();
   // The overlay is hidden on the panel while the desktop shows there.
   $("statsOn").disabled = displayWant;
+  $("overlayMirrorNote").hidden = !displayWant;
   $("statsOnLabel").classList.toggle("off", displayWant);
   $("statsOnLabel").title = displayWant ? "The panel shows the desktop; the overlay returns when the second display is off."
     : "Stats overlay on the panel. Off hides it and keeps your slot choices.";
@@ -1412,6 +1446,76 @@ async function openDisplaySettings() {
     const j = await api("/api/display/open-settings", {});
     say("Display Configuration opened; Virtual-RYUO is in the monitor list", false, "Ran " + j.command.join(" "));
   } catch (e) { fail(e, "Display Configuration not opened"); }
+}
+
+/* ---------- burn-in protection ---------- */
+// The receiver's own protection for the OLED panel while it shows the desktop. ryuod saves the
+// switch (config.burnInProtection) and reports the receiver's state in display.protection.
+let protection = null;          // {enabled, state, idleS, nextShiftS}; null for a ryuod without the switch
+let protectionSending = false;  // a POST is in flight; the poll must not reset the switch
+let protectionAsking = false;   // the card asks before protection goes off
+/** Whole minutes, or seconds under 1 min. */
+function formatDuration(seconds) {
+  return seconds < 60 ? `${Math.max(0, Math.round(seconds))} s` : `${Math.round(seconds / 60)} min`;
+}
+/** The receiver's state in a few words, e.g. "active · next shift in 2 min". */
+function protectionText(current) {
+  if (!current.enabled) return "off";
+  const idle = current.idleS == null ? "" : ` · idle ${formatDuration(current.idleS)}`;
+  switch (current.state) {
+    case null: case undefined: return "starts with the mirror";  // not streaming, or no report yet
+    case "active": return "active" + (current.nextShiftS == null ? "" : ` · next shift in ${formatDuration(current.nextShiftS)}`);
+    case "dimmed": return "dimmed" + idle;
+    case "black": return "black" + idle;
+    case "refresh": return "refreshing";
+    default: return current.state;
+  }
+}
+function renderProtection() {
+  const chip = $("protChip");
+  $("protCard").hidden = chip.hidden = !protection;
+  if (!protection) return;
+  const enabled = protection.enabled, status = "Protection: " + protectionText(protection);
+  $("protSwitch").setAttribute("aria-checked", enabled ? "true" : "false");
+  $("protSwitch").disabled = protectionSending;
+  $("protStatus").textContent = status;
+  $("protWarn").hidden = enabled;
+  $("protAsk").hidden = !protectionAsking;
+  chip.classList.toggle("warn", !enabled);
+  chip.textContent = enabled ? status : "Burn-in protection off";
+}
+/** The poll's setting and receiver report; an older ryuod has neither, and the card stays hidden. */
+function syncProtection(state) {
+  const savedEnabled = state.config && state.config.burnInProtection;
+  if (typeof savedEnabled !== "boolean") { protection = null; renderProtection(); return; }
+  const receiverReport = (state.display && state.display.protection) || {};
+  const enabled = protectionSending && protection ? protection.enabled : savedEnabled;
+  protection = { state: null, idleS: null, nextShiftS: null, ...receiverReport, enabled };
+  renderProtection();
+}
+/** On sends at once; off asks first in the card. */
+function protectionClick() {
+  if (!protection.enabled) { sendProtection(true); return; }
+  protectionAsking = true; renderProtection();
+  $("protTurnOff").focus();
+}
+async function sendProtection(enabled) {
+  const previous = protection.enabled;
+  protectionAsking = false; protectionSending = true;
+  protection = { ...protection, enabled }; renderProtection();
+  const done = `Burn-in protection ${enabled ? "on" : "off"}`;
+  try {
+    const reply = await api("/api/display/protection", { enabled });
+    protection = { ...protection, ...reply.protection, enabled: reply.config.burnInProtection };
+    if (config) config.burnInProtection = reply.config.burnInProtection;
+    // ryuod hands a running mirror the change within about 1 s; otherwise it is used on the next start.
+    say(displayWant ? `${done} — applies to the panel within 1 s` : `${done}; applies from the next start of the second display`);
+  } catch (error) {
+    protection = { ...protection, enabled: previous };
+    fail(error, enabled ? "Burn-in protection not turned on" : "Burn-in protection not turned off");
+  } finally {
+    protectionSending = false; renderProtection();
+  }
 }
 
 /* ---------- tray settings ---------- */
@@ -1548,7 +1652,7 @@ async function pollState() {
     if (!config) applyConfig(j.config); else syncConfig(j.config);
     onUploadState(j.upload);
     renderDisplay(j.display);
-    renderPanel(j.panel); renderDesktop(j.desktop); syncTray(j.tray);
+    renderPanel(j.panel); renderDesktop(j.desktop); syncTray(j.tray); syncProtection(j);
   } catch (e) {
     unreachable = true;
     showDown(e.message);
@@ -1612,6 +1716,9 @@ $("modeMirror").addEventListener("click", () => { if (!displayWant) sendDisplay(
 $("displaySwitch").addEventListener("click", () => sendDisplay(!displayWant));
 $("displayRetry").addEventListener("click", () => sendDisplay(true));
 $("panelSwitch").addEventListener("click", () => sendPanel(!panelOn));
+$("protSwitch").addEventListener("click", protectionClick);
+$("protTurnOff").addEventListener("click", () => sendProtection(false));
+$("protCancel").addEventListener("click", () => { protectionAsking = false; renderProtection(); $("protSwitch").focus(); });
 $("panelTurnOn").addEventListener("click", () => sendPanel(true));
 $("askAgain").addEventListener("click", askAgain);
 $("displaySettingsOpen").addEventListener("click", openDisplaySettings);

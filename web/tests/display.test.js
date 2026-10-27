@@ -36,7 +36,7 @@ describe("second display", () => {
     const note = $("displayInfo").textContent;
     expect(note).toContain("a 2240×1080 virtual monitor");
     expect(note).toContain("Windows dragged past its right edge appear on the panel");
-    expect(note).toContain("stats overlay and background video are hidden");
+    expect(note).toContain("HomeUI shows a plain black backdrop with no stats overlay; overlay changes are saved and applied when it stops");
     expect(note).toContain("up to about 10 s");
     expect($("displaySection").textContent).toContain("choose Virtual-RYUO and allow restoring");
   });
