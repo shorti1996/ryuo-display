@@ -519,6 +519,38 @@ describe("Delete", () => {
     expect(daemon.posts("/api/media/delete")).toEqual([]);
     expect(state(CUSTOM[0])[0]).toBe("Really delete?");
   });
+
+  // The old page's showOnPanel rebuilt the tiles only after ryuod took the file, so a refused
+  // Apply left the armed button as it was; the second click still deletes.
+  it("keeps a pending second click when ryuod refuses Apply", async () => {
+    const daemon = await openPage();
+    delButton(CUSTOM[0]).click();
+    thumb(PRESET[0]).click();
+    daemon.replyOnce("POST /api/media/select", { status: 503, body: { ok: false, error: "cooler busy" } });
+    $("pvApply").click();
+    await tick(0);
+    expect($("result").textContent).toBe(`${PRESET[0]} not applied: cooler busy`);
+    expect(state(CUSTOM[0])[0]).toBe("Really delete?");
+    delButton(CUSTOM[0]).click();
+    await tick(0);
+    expect(daemon.posts("/api/media/delete")).toEqual([{ names: [CUSTOM[0]] }]);
+  });
+
+  // Only Apply and Replace raise AppState.applied. A playlist tick and Restart video post the
+  // same route, but the old page did not rebuild its tiles for them, so the armed button stays.
+  it("keeps a pending second click through a playlist tick and Restart video", async () => {
+    const daemon = await openPage();
+    delButton(CUSTOM[0]).click();
+    box(CUSTOM[1]).click();
+    await tick(400);
+    $("play").click();
+    await tick(0);
+    expect(daemon.posts("/api/media/select")).toHaveLength(2);
+    expect(state(CUSTOM[0])[0]).toBe("Really delete?");
+    delButton(CUSTOM[0]).click();
+    await tick(0);
+    expect(daemon.posts("/api/media/delete")).toEqual([{ names: [CUSTOM[0]] }]);
+  });
 });
 
 describe("the hero, as the old renderHero drew it", () => {

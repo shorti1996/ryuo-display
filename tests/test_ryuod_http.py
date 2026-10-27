@@ -352,6 +352,94 @@ def test_get_dist_directory(api, dist, path):
     assert body["ok"] is False
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        # unquote runs once, so a double-encoded `..` stays a literal file name.
+        "/%252e%252e/ryuod.py",
+        "/%252e%252e%252fryuod.py",
+        # A backslash is a plain name character on Linux, raw or encoded.
+        "/..%5cryuod.py",
+        "/..\\ryuod.py",
+        # Overlong UTF-8 for `.` decodes to U+FFFD, never to a dot.
+        "/%c0%ae%c0%ae/ryuod.py",
+        # Leading slashes, raw or encoded, are stripped before the join, so they cannot make it absolute.
+        "///etc/passwd",
+        "/%2fetc%2fpasswd",
+        # More `..` than DIST is deep still stops at /, outside DIST.
+        "/" + "../" * 40 + "etc/passwd",
+        # A name longer than NAME_MAX, and a path longer than PATH_MAX: realpath gives up quietly.
+        "/" + "a" * 300 + ".js",
+        "/" + "a/" * 3000 + "a.js",
+    ],
+)
+def test_get_outside_dist_encodings(api, dist, path):
+    status, _, body = api.get(path)
+    assert status == 404
+    assert body == {"ok": False, "error": "not found"}
+
+
+@pytest.mark.parametrize("path", ["/index.html/..", "/index.html/%2e%2e", "/fonts/.."])
+def test_get_resolves_to_dist_itself(api, dist, path):
+    # DIST itself is not inside DIST: the check is against DIST plus a separator.
+    (dist / "fonts").mkdir()
+    assert api.get(path)[0] == 404
+
+
+def test_get_sibling_with_dist_as_prefix(api, dist, tmp_path):
+    """tmp_path/dist2 starts with the characters of tmp_path/dist; neither `..` nor a symlink reaches it."""
+    sibling = tmp_path / "dist2"
+    sibling.mkdir()
+    (sibling / "x.js").write_text("sibling")
+    (dist / "sibling.js").symlink_to(sibling / "x.js")
+    for path in ("/../dist2/x.js", "/%2e%2e/dist2/x.js", "/sibling.js"):
+        assert api.get(path)[0] == 404, path
+
+
+def test_get_symlinked_directory_out_of_dist(api, dist, tmp_path):
+    (dist / "up").symlink_to(tmp_path)
+    assert api.get("/up/ryuod.py")[0] == 404
+
+
+def test_get_symlink_within_dist(api, dist):
+    # realpath lands inside DIST, so a link between two built files is served.
+    (dist / "main.js").write_bytes(b"main")
+    (dist / "alias.js").symlink_to(dist / "main.js")
+    status, _, body = api.get("/alias.js")
+    assert (status, body) == (200, b"main")
+
+
+def test_get_dist_is_a_symlink(api, dist, tmp_path, monkeypatch):
+    """A DIST that is itself a symlink (a checkout reached through one) still serves its files."""
+    link = tmp_path / "linked-dist"
+    link.symlink_to(dist)
+    monkeypatch.setattr(ryuod, "DIST", str(link))
+    (dist / "main.js").write_bytes(b"main")
+    status, _, body = api.get("/main.js")
+    assert (status, body) == (200, b"main")
+    assert api.get("/../ryuod.py")[0] == 404
+
+
+def test_get_fifo_in_dist(api, dist):
+    # Not a regular file: answered 404 at once instead of blocking the handler on open().
+    os.mkfifo(dist / "pipe.js")
+    assert api.get("/pipe.js")[0] == 404
+
+
+def test_get_static_case_sensitive(api, dist):
+    (dist / "main.js").write_bytes(b"main")
+    assert api.get("/MAIN.JS")[0] == 404
+
+
+def test_get_static_ignores_query(api, dist):
+    (dist / "main.js").write_bytes(b"main")
+    status, _, body = api.get("/main.js?v=2")
+    assert (status, body) == (200, b"main")
+    # An encoded `?` or `#` is part of the name, which no built file has.
+    assert api.get("/main.js%3fv=2")[0] == 404
+    assert api.get("/main.js%23top")[0] == 404
+
+
 def test_get_unknown_path(api):
     assert api.get("/api/nope")[0] == 404
     assert api.get("/api/state/extra")[0] == 404
