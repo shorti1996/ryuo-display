@@ -12,3 +12,6 @@ __pycache__/
 .ruff_cache/
 web/node_modules/
 .idea/
+
+# record.py output: recordings and frames
+web/demo/out/

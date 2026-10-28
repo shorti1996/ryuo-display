@@ -40,6 +40,10 @@ still rog-red-glow.png \
   "gradients=s=$size:n=3:c0=0xe5252b:c1=0x2a0000:c2=0x050506:type=radial:x0=448:y0=216:x1=1100:y1=600,drawtext=fontfile=$font:text=RYUO IV:fontsize=96:fontcolor=white@0.92:x=(w-tw)/2:y=(h-th)/2"
 still display-black.png "color=c=black:s=$size"
 
+# The file record.py drops on the upload zone; not on the mock cooler until then.
+clip gameplay-highlight.mp4 \
+  "nullsrc=s=448x216:r=30,geq=r='70+60*sin(5*log(hypot(X-W/2\,Y-H/2)+2)-T*4)':g='14+12*sin(4*atan2(Y-H/2\,X-W/2)+T)':b='110+90*sin(5*log(hypot(X-W/2\,Y-H/2)+2)-T*4+1.6)',scale=$size"
+
 # The cooler's built-in presets, stood in for by more gradients.
 palettes=("0xe5252b 0x120406" "0x00b4ff 0x020814" "0xffb000 0x140a00" "0x9b5cff 0x0a0418" "0x2bff88 0x021208")
 types=(linear circular square spiral radial)
