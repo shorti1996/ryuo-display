@@ -14,6 +14,20 @@ python3 ~/.claude/skills/phone-video-montage/scripts/gif.py out/hardware-demo.mp
 
 Output is byte-identical to the committed GIF (checked 2026-10-28 with `cmp`).
 
+`social-preview.jpg` (1280×640, 111 kB) is the GitHub social preview, set on 2026-10-28: the
+`koncowka` clip at 2.0 s (fastfetch readable on the panel), tone-mapped with the same
+libplacebo settings, the top 1920×960 of the frame, scaled with lanczos, JPEG `-q:v 3`. The
+camera keeps the panel at the top edge in every frame of that clip, so the crop starts at
+row 0; a padded version with a faded black band above was tried and rejected. The copy
+uploaded to GitHub went through a PNG intermediate, so its bytes differ from this file; the
+picture is the same.
+
+```bash
+ffmpeg -ss 2.0 -i raw/koncowka_20261028_192344.mp4 -frames:v 1 \
+  -vf "libplacebo=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=pc:tonemapping=bt.2390:peak_detect=1:saturation=1.1:contrast=1.05:format=rgb24,crop=1920:960:0:0,scale=1280:640:flags=lanczos" \
+  -q:v 3 social-preview.jpg
+```
+
 ## Sources
 
 Galaxy Z Flip 6 recordings from 2026-10-28, 1080p HEVC Main 10, HDR10. They live in `raw/`
