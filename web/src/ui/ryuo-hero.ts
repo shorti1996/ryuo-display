@@ -2,7 +2,7 @@ import { html, type PropertyValues } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import type { Actions } from "../actions.ts";
 import { mediaUrl, previewError } from "../api.ts";
-import { mirrorChipText, mirrorHintShown } from "../display.ts";
+import { mirrorChipText, mirrorHintShown, mirrorLeaving } from "../display.ts";
 import { heroFile, heroHint, heroView, isImage, liveName, livePlayable } from "../media.ts";
 import { rgbHex, type SlotCell, slotCell } from "../overlay.ts";
 import { protectionChip } from "../protection.ts";
@@ -57,9 +57,15 @@ function mirrorView(state: AppState, actions: Actions | undefined, shown: boolea
   const status = state.display;
   const protection = state.protection;
   const open = !!state.desktop?.displaySettings;
-  return html`<div class="mirror-view" id="mirrorView" ?hidden=${!shown}>
+  const leaving = mirrorLeaving(state.displayWant, status);
+  return html`<div class=${leaving ? "mirror-view leaving" : "mirror-view"} id="mirrorView" ?hidden=${!shown}>
     <div class="win" aria-hidden="true" style="left: 8%; top: 14%; width: 46%; height: 60%; background: #181B22; border: 1px solid #2A2E38"></div>
     <div class="win" aria-hidden="true" style="left: 44%; top: 30%; width: 44%; height: 56%; background: #1B1F27; border: 1px solid #2E3340"></div>
+    <div class="switching" id="mirrorLeaving" role="status" ?hidden=${!leaving}>
+      <span class="spinner" aria-hidden="true"></span>
+      <b>Switching to Stats &amp; background</b>
+      <span>Removing the virtual monitor takes up to about 10 s. The panel shows the desktop until then.</span>
+    </div>
     <div class="chip" id="mirrorChip">${mirrorChipText(status)}</div>
     <div class=${protection && !protection.enabled ? "chip prot warn" : "chip prot"} id="protChip" ?hidden=${!protection}>${protection ? protectionChip(protection) : ""}</div>
     <p class="caption" id="mirrorHint" ?hidden=${!mirrorHintShown(status)}><span id="mirrorHintText">Position and scale: System Settings → Display &amp; Monitor → Display Configuration → Virtual-RYUO</span><button

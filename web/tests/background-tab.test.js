@@ -765,10 +765,15 @@ describe("the hero, as the old renderHero drew it", () => {
         for (const status of DISPLAYS)
           for (const displayWant of [false, true])
             for (const preview of [null, CUSTOM[0], CUSTOM[1]])
-              for (const applyAsking of [false, true])
+              for (const applyAsking of [false, true]) {
+                // Left out on purpose: the switch clicked off while ryuod still reports "on". The old
+                // page flashed the live view there; this one keeps the mirror view with its switching
+                // note (mirror-tab.test.js).
+                if (status?.state === "on" && !displayWant) continue;
                 matrix.push({ unreachable, panel, display: status, displayWant, preview, applyAsking, config, device });
+              }
     const { mismatches, views } = await compare(matrix);
-    expect(matrix).toHaveLength(504);
+    expect(matrix).toHaveLength(468);
     // Without this, a stub that drew nothing would agree with a page that drew nothing.
     expect([...views].sort()).toEqual(["down", "live", "mirror", "preview", "standby"]);
     expect(mismatches).toEqual([]);

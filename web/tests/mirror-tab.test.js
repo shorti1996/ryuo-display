@@ -67,9 +67,24 @@ describe("the mirror switch's click, before ryuod answers", () => {
     expect(daemon.posts("/api/display")).toEqual([{ on: false }]);
     expect($("mirrorView").hidden).toBe(false);
     expect($("mirrorChip").textContent).toBe("Desktop mirror · stopping…");
+    expect($("mirrorLeaving").hidden).toBe(false);
     daemon.display = { ...daemon.display, state: "off" };
     await tick(1000);
     expect($("mirrorView").hidden).toBe(true);
+    expect($("mirrorLeaving").hidden).toBe(true);
+  });
+
+  it("shows the switching note from the click, before ryuod answers, without a live view in between", async () => {
+    const daemon = await openPage(makeDaemon({ display: { on: true, state: "on", fps: 60, mbps: 9 } }));
+    expect($("mirrorLeaving").hidden).toBe(true);
+    const answer = holdDisplayPosts(daemon);
+    $("modeStats").click();
+    await tick(0);
+    expect($("mirrorView").hidden).toBe(false);
+    expect($("mirrorLeaving").hidden).toBe(false);
+    answer();
+    await tick(0);
+    expect($("mirrorLeaving").hidden).toBe(false);
   });
 
   it("is refused for standby: the mirror controls are locked while the panel is off", async () => {
