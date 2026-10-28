@@ -1,5 +1,7 @@
 # rog-ryuo-lcd
 
+![The cooler's panel on a running PC: the KDE desktop moving between the monitor and the panel, cmatrix, an audio visualiser, fastfetch and a cat video](docs/011-hardware-demo/hardware-demo.gif)
+
 Linux software for the 2240×1080 OLED panel on the pump of the ASUS ROG RYUO IV AIO cooler. It replaces
 the Windows app for the screen: it plays videos stored on the cooler and draws live PC stats
 (CPU, GPU, memory, disk, network, clock) over them, refreshed once per second. The panel shows

@@ -2,7 +2,7 @@
 
 `hardware-demo.gif` (640 px, 12 fps, 20.7 s, 7.3 MB) shows the cooler's panel on the real PC:
 the KDE desktop switching between monitor and panel, cmatrix, the audio visualiser, a terminal,
-fastfetch and a cat clip. Not in the README yet (2026-10-28).
+fastfetch and a cat clip. It is the hero at the top of the README (2026-10-28).
 
 Rebuild it, from this folder, with `/phone-video-montage`'s scripts
 (`/home/shared/repos/claude-skills/phone-video-montage/scripts/`):
