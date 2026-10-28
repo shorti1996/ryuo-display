@@ -91,6 +91,13 @@ The two parts start at different times:
 | Units | °C or °F, and the memory frequency in MHz (Linux has no unprivileged source for it; 0 hides that stat) |
 | Second display | a switch that shows a virtual monitor of the desktop on the panel, and its state: off, starting, on with the frames/s and Mb/s sent, stopping, or the error with the next retry in seconds; a switch for burn-in protection |
 
+The clips on this page are recorded from `npm run demo`, which serves the page with made-up data
+(see [Development](#development)).
+
+![Overlay tab: hovering a slot row outlines that slot on the preview, slot 4 changes from GPU Load to GPU Speed, and the Overlay switch hides and shows the stats](docs/demo/overlay.gif)
+
+![Background tab: a click on a file previews it in the hero, then Apply and Replace put it on the panel in place of the playlist](docs/demo/preview-apply.gif)
+
 Settings are saved in `~/.config/ryuo/state.json` and restored when the daemon starts.
 
 Stats whose label starts with "Fan Speed" (for example disk read MB/s, network KB/s) use the
@@ -128,6 +135,8 @@ Turn on **Panel as monitor** under Second display on the control page (or **Use 
 display** in the tray). Within about 5 s the desktop gets a 2240×1080 virtual monitor named
 Virtual-RYUO, and the panel shows it in place of the background video and stats overlay. Windows
 dragged past the right edge of your main monitor appear on the panel, with the mouse pointer.
+
+![Desktop mirror switched on: the hero becomes the Virtual-RYUO desktop and the tab shows frames/s and burn-in protection; Stats & background brings the stats back after a 5 s switch](docs/demo/desktop-mirror.gif)
 
 The first time, Plasma shows a **Share screen** dialog. Display mode captures the virtual monitor
 through the desktop's screen-sharing portal, because that is the capture KWin draws the pointer
@@ -195,6 +204,14 @@ and received.
 [Troubleshooting](#troubleshooting).
 
 ### Uploading your own video
+
+![A video dropped on the Background tab: converted to 2240×1080 HEVC, copied to the cooler, then playing on the panel](docs/demo/upload.gif)
+
+On the control page, drop the file on the Background tab's upload zone or press **Browse**. A video
+the panel can't play as it is gets converted to 2240×1080 HEVC first, without sound; a still image
+becomes a 2240×1080 PNG. A finished upload plays on a loop.
+
+From a terminal:
 
 ```sh
 ./ryuo.py push clip.mp4

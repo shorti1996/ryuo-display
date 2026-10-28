@@ -1,75 +1,56 @@
-# Demo recording: scenario
+# Demo recordings: scenario
 
-What `web/demo/record.py` will play against `npm run demo`, recorded by Playwright. Times are
-approximate. The total length is about 65 s.
+What `web/demo/record.py` plays against `npm run demo`, recorded by Playwright: four short clips,
+one per feature, each its own take. Lengths are as recorded on 2026-10-28.
 
 ## Setup
 
-- **Capture:** a 1920×1080 headless Chromium window with the page zoomed to 4/3, so it is laid
-  out as at 1440×810 (header, hero and strip fit without scrolling) and drawn at full
-  resolution. Frames come from the DevTools screencast and are timed into a 30 fps master.
-- **Outputs:** `reddit.mp4` (1920×1080, the whole take), `readme.mp4` (1280×720, the whole take,
-  under GitHub's 10 MB upload limit) and `readme.gif` (800 px wide, cropped to the hero and
-  strip: shots 3–4, the start of 6, and 7).
+- **Frame:** the page is laid out 1440 CSS px wide and drawn at 1920 px (root zoom 4/3). The
+  window is as tall as the page from its top to just below the part the clip uses, so the hero,
+  the strip and the open tab are on screen together and the page never scrolls. The crop is the
+  column, 1132 CSS px, plus a margin; the header is outside it.
+- **Toast:** pinned 16 px above the window's bottom, so the window's bottom is the crop's bottom
+  and the toast lands in the frame.
+- **Outputs**, under `web/demo/out/`: `<clip>.mp4` (the crop at full resolution, H.264) and
+  `<clip>.gif` (800 px wide, 8 fps, 96 colours). The README's copies are in `docs/demo/`.
 - **Cursor:** a white dot with a dark ring, drawn into the page. It moves along eased curves
-  (about 0.6–0.9 s per move), shrinks on each click and sends out a ring, and waits in the margin
-  right of the column.
-- **State:** a fresh demo server for every take, so each recording starts from the same playlist
-  (aurora-drift, neon-life and synthwave-spiral, in order) with the second display off.
-- **Scrolling:** smooth, never a jump.
+  (about 0.5–0.9 s per move), shrinks on each click and sends out a ring, and waits in the margin
+  right of the column, inside the crop.
+- **State:** a fresh demo server for every clip, so each one starts from the same playlist
+  (aurora-drift, neon-life and synthwave-spiral, in order) with the second display off. The tab
+  the clip uses is open before the take starts.
 
-## Shots
+## Clips
 
-### 1. Opening (0:00–0:05)
+### overlay (13 s, Overlay tab)
 
-The page at the top: header with "Connected · V1.0.10" and the panel switch on; the hero plays
-aurora-drift.mp4 with the six stats changing every second; chip "Live · aurora-drift.mp4 + 2
-more". The cursor rests to the right of the column. Nothing moves except the hero.
+The cursor passes over slot rows 1, 3 and 4; each outlines its slot on the hero. It clicks slot 4's
+list and GPU Load becomes GPU Speed (the native list does not show in the screencast). It unticks
+**Overlay** in the strip, and the stats leave the hero; 1.6 s later it ticks it again.
 
-### 2. Background tab (0:05–0:10)
+### preview-apply (14 s, Background tab)
 
-The cursor goes to the **Background** tab and clicks. The page scrolls down until the tile grid
-fills the frame: seven files with thumbnails and sizes, three marked "On panel", the drop zone,
-and the built-in presets below.
+The cursor passes over two tiles and clicks **sunset-bloom.mp4**. The hero plays it with the bar
+"PREVIEW sunset-bloom.mp4 · not on the panel yet · Apply". It clicks **Apply**, the bar asks
+"Replace the 3-file playlist with this file?", and it clicks **Replace**. The toast confirms and the
+chip becomes "Live · sunset-bloom.mp4".
 
-### 3. Preview a clip (0:10–0:18)
+### upload (14 s, Background tab)
 
-The cursor passes over two tiles, stops on **sunset-bloom.mp4** and clicks its thumbnail. The
-page scrolls back up to the hero, which now plays sunset-bloom with the preview bar: "PREVIEW
-sunset-bloom.mp4 · not on the panel yet · Apply". Hold 3 s.
+A file card, "gameplay-highlight.mp4", follows the cursor in from the right edge and is dropped on
+the drop zone. The status line steps through checking, converting to 2240×1080 HEVC, copying over
+adb and starting playback while the bar fills. A new tile appears with "On panel" and the hero plays
+the uploaded clip. The clip is rendered by `make-media.sh` and looks unlike the seven on the cooler.
 
-### 4. Apply (0:18–0:26)
+### desktop-mirror (22 s, Desktop mirror tab)
 
-The cursor clicks **Apply**. The bar asks "Replace the 3-file playlist with this file?". Pause
-1.2 s, then click **Replace**. The toast reads "Background sunset-bloom.mp4 — cooler confirmed,
-video restarted", and the chip becomes "Live · sunset-bloom.mp4". Hold 2.5 s.
-
-### 5. Upload (0:26–0:42)
-
-The page scrolls down to the drop zone. A file card, "gameplay-highlight.mp4", follows the cursor
-in from the right edge and is dropped on the zone. The status line under it steps through
-"Checking…", "Converting to 2240×1080 HEVC with hevc_vaapi: 40 % at 3.1x", "Copying to the
-cooler over adb…" and "Starting playback…" while the bar fills. A new tile appears with "On
-panel". The page scrolls up: the hero plays the uploaded clip. Hold 2 s.
-
-The uploaded clip is a new one rendered by make-media.sh, so it looks different from the seven
-already on the cooler.
-
-### 6. Desktop mirror on (0:42–0:54)
-
-The cursor clicks **Desktop mirror** in the strip under the hero. The hero turns into the
-sketched desktop with "Desktop mirror · starting…"; 2.5 s later it reads "Virtual-RYUO
-2240×1080", with "Protection: active · next shift in 3 min" on the right and the "Position and
-scale" caption below. The cursor opens the **Desktop mirror** tab; the page scrolls a little to
-show "On: 29.4 frames/s at 11.8 Mb/s to the panel" and the burn-in protection card. Hold 2 s.
-
-### 7. Back to stats (0:54–1:05)
-
-The page scrolls back to the hero. The cursor clicks **Stats & background**. The windows fade
-under the spinner and "Switching to Stats & background" for 5 s, then the hero shows the
-uploaded clip again with the stats. Hold 3 s; end.
+The cursor clicks **Desktop mirror** in the strip. The hero turns into the sketched desktop with
+"Desktop mirror · starting…", then "Virtual-RYUO 2240×1080"; the tab shows the switch on, "On: …
+frames/s at … Mb/s to the panel" and the burn-in protection card active. The cursor clicks **Stats &
+background**: the hero shows the spinner and "Switching to Stats & background" for 5 s, then the
+background and stats again.
 
 ## Files
 
-- `web/demo/record.py`: the script; one command records one take.
+- `web/demo/record.py`: the script; `record.py [CLIP ...]` records the named clips, all by default.
 - `web/demo/out/`: the recordings, ignored by git.
