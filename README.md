@@ -32,7 +32,7 @@ Other distributions, desktops and firmware versions have not been tried.
 | a StatusNotifier system tray | tray icon | KDE Plasma has one. GNOME needs the AppIndicator extension. |
 | `nvidia-smi` (optional) | NVIDIA GPU stats | AMD GPUs are read from sysfs |
 | KDE Plasma 6 on Wayland, an NVIDIA GPU (optional) | [second display](#second-display) | Fedora packages: `krfb`, `util-linux-core` (`unshare`), `pipewire-utils`, `pipewire-gstreamer`, `gstreamer1-plugins-base`, `gstreamer1-plugins-bad-free` (its nvcodec plugin has the `nvh265enc` encoder), `python3-gobject-base` (PyGObject), `android-tools` (adb). The encoder is NVENC, so other GPUs cannot run it. Without PyGObject the panel shows no mouse pointer, and a window moved onto the panel after the start is shown at about 1 frame/s. |
-| `uv`, `node`/`npm` | development only | tests, lint, and rebuilding the control page |
+| `uv`, `node`/`npm` | development only | tests, lint and rebuilding the control page |
 
 `make deps` checks all of these and prints the Fedora package names for anything missing. The
 second-display programs are listed separately and do not fail the check.
@@ -87,7 +87,7 @@ The two parts start at different times:
 |---|---|
 | Panel preview | a scaled drawing of the overlay with the latest values |
 | Stats in each slot | which stat goes in each of the 6 overlay slots, and a switch to show or hide the whole overlay (hiding keeps your slot choices). Positions are fixed by the firmware, so you place a stat by choosing its slot. |
-| Overlay colours | one title colour and one value/unit colour for all slots, an optional animated filter over the text, and its opacity (0–100 %) |
+| Overlay colours | one title colour and one value/unit colour for all slots, an optional animated filter over the text with its opacity (0–100 %) |
 | Brightness | 0–102 on the device's scale: 100 gives 250/255 backlight, 102 gives the full 255/255 |
 | Background media | the videos and images already on the cooler, play mode (Single, Cycle, Random). Play restarts the video. |
 | Units | °C or °F, and the memory frequency in MHz (Linux has no unprivileged source for it; 0 hides that stat) |
@@ -313,11 +313,33 @@ last message, so the daemon sends a stats heartbeat every second.
 
 ## Credits
 
-Prior work on the same cooler, read during the reverse engineering:
+Prior work on the same cooler, read during the reverse engineering. Findings from both are cited
+by name in the docs and code where they are used:
 
 - https://github.com/FoxPodZ/ryuo-iv-screen
 - https://github.com/dragocz95/asus-ryuo-iv-linux
 
-This project is not affiliated with or endorsed by ASUS.
+## Disclaimer
 
-No license has been chosen yet.
+Unofficial; not affiliated with or endorsed by ASUS.
+
+This repository holds no ASUS firmware, APKs or decompiled source files. The protocol was worked
+out by decompiling the HomeUI and SerialService apps that run on the cooler, for interoperability.
+The docs describe what that code does and cite it by file and line (`MainActivity.java:209-213`);
+they quote only short identifiers such as method names, JSON keys and message numbers. The
+decompiled sources stay in the git-ignored `re/` folder; to follow a citation, decompile your own
+copy of the apps.
+
+Nothing here writes the cooler's firmware. The daemon sends the HID messages ASUS's own software
+sends and uploads videos over adb; the second display runs a program from `/data/local/tmp` on the
+cooler without installing anything. It is still unofficial software driving an expensive cooler, so
+whether to run it is your decision, and so is the warranty risk.
+
+## Licence
+
+GNU General Public License v3 or later (`GPL-3.0-or-later`) for the whole repository: code, docs
+and media. Full text in [LICENSE](LICENSE). You may use, change and share it; anything you
+distribute that is built from it must be released under the same licence, with its source.
+
+The protocol itself (frame layout, checksum, command names, JSON fields) is a set of facts about
+ASUS's hardware and is outside this licence. A clean-room implementation under any licence is fine.

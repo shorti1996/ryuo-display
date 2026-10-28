@@ -2,6 +2,8 @@
 name = "rog-ryuo-lcd"
 version = "0.1.0"
 description = "Linux driver, stats daemon and tray for the ASUS ROG RYUO IV pump LCD"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 # Runtime is the standard library plus the ffmpeg and adb binaries; the tray also needs PySide6
 # (python3-pyside6 on Fedora). imageio-ffmpeg supplies an ffmpeg binary when none is on PATH, but
