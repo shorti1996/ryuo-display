@@ -157,7 +157,7 @@ function setDisplay(on: boolean): void {
       displayState = on ? "on" : "off";
       displaySince = Date.now();
     },
-    on ? 2500 : 1500,
+    on ? 2500 : 5000,
   );
 }
 
