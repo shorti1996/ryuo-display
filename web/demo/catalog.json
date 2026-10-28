@@ -1,0 +1,220 @@
+[
+  {
+    "item": "CPU Load",
+    "title": "CPU",
+    "unit": "%",
+    "group": "CPU",
+    "available": true,
+    "source": "/proc/stat",
+    "note": null,
+    "clipsIn": []
+  },
+  {
+    "item": "CPU Usage",
+    "title": "CPU",
+    "unit": "%",
+    "group": "CPU",
+    "available": true,
+    "source": "/proc/stat",
+    "note": "busiest single core",
+    "clipsIn": []
+  },
+  {
+    "item": "CPU Temperature",
+    "title": "CPU",
+    "unit": "°C",
+    "group": "CPU",
+    "available": true,
+    "source": "k10temp Tctl",
+    "note": null,
+    "clipsIn": []
+  },
+  {
+    "item": "CPU Speed Average",
+    "title": "CPU",
+    "unit": "MHZ",
+    "group": "CPU",
+    "available": true,
+    "source": "cpufreq",
+    "note": null,
+    "clipsIn": []
+  },
+  {
+    "item": "CPU Voltage",
+    "title": "CPU",
+    "unit": "V",
+    "group": "CPU",
+    "available": false,
+    "source": null,
+    "note": null,
+    "clipsIn": []
+  },
+  {
+    "item": "GPU Load",
+    "title": "GPU",
+    "unit": "%",
+    "group": "GPU",
+    "available": true,
+    "source": "nvidia-smi",
+    "note": null,
+    "clipsIn": []
+  },
+  {
+    "item": "GPU Usage",
+    "title": "GPU",
+    "unit": "%",
+    "group": "GPU",
+    "available": true,
+    "source": "nvidia-smi",
+    "note": "same value as GPU Load (firmware reads gpu.load)",
+    "clipsIn": []
+  },
+  {
+    "item": "GPU Temperature",
+    "title": "GPU",
+    "unit": "°C",
+    "group": "GPU",
+    "available": true,
+    "source": "nvidia-smi",
+    "note": null,
+    "clipsIn": []
+  },
+  {
+    "item": "GPU Speed",
+    "title": "GPU",
+    "unit": "MHZ",
+    "group": "GPU",
+    "available": true,
+    "source": "nvidia-smi",
+    "note": null,
+    "clipsIn": []
+  },
+  {
+    "item": "GPU Power",
+    "title": "GPU",
+    "unit": "°C",
+    "group": "GPU",
+    "available": true,
+    "source": "nvidia-smi",
+    "note": "firmware draws a °C unit; Fan Speed GPU W shows RPM instead",
+    "clipsIn": []
+  },
+  {
+    "item": "GPU Voltage",
+    "title": "GPU",
+    "unit": "V",
+    "group": "GPU",
+    "available": false,
+    "source": null,
+    "note": null,
+    "clipsIn": []
+  },
+  {
+    "item": "Memory Utilization",
+    "title": "Memory Utilization",
+    "unit": "%",
+    "group": "Memory",
+    "available": true,
+    "source": "/proc/meminfo",
+    "note": null,
+    "clipsIn": [
+      4
+    ]
+  },
+  {
+    "item": "Memory Frequency",
+    "title": "Memory Frequency",
+    "unit": "MHZ",
+    "group": "Memory",
+    "available": false,
+    "source": null,
+    "note": "no unprivileged source; enter it under Units",
+    "clipsIn": [
+      4
+    ]
+  },
+  {
+    "item": "Hard Disk Temperature",
+    "title": "Hard Disk Temperature",
+    "unit": "°C",
+    "group": "Storage",
+    "available": true,
+    "source": "nvme Composite",
+    "note": null,
+    "clipsIn": [
+      3,
+      4,
+      5
+    ]
+  },
+  {
+    "item": "Motherboard Temperature",
+    "title": "Motherboard",
+    "unit": "°C",
+    "group": "Board",
+    "available": true,
+    "source": "gigabyte_wmi temp1",
+    "note": null,
+    "clipsIn": []
+  },
+  {
+    "item": "Date&Time",
+    "title": "",
+    "unit": "ss",
+    "group": "Clock",
+    "available": true,
+    "source": "device clock",
+    "note": "device clock; title is weekday and day",
+    "clipsIn": []
+  },
+  {
+    "item": "Fan Speed Disk R MB/s",
+    "title": "Disk R MB/s",
+    "unit": "RPM",
+    "group": "Custom",
+    "available": true,
+    "source": "/proc/diskstats nvme0n1",
+    "note": "unit slot always reads RPM",
+    "clipsIn": []
+  },
+  {
+    "item": "Fan Speed Disk W MB/s",
+    "title": "Disk W MB/s",
+    "unit": "RPM",
+    "group": "Custom",
+    "available": true,
+    "source": "/proc/diskstats nvme0n1",
+    "note": "unit slot always reads RPM",
+    "clipsIn": []
+  },
+  {
+    "item": "Fan Speed Net Down KB/s",
+    "title": "Net Down KB/s",
+    "unit": "RPM",
+    "group": "Custom",
+    "available": true,
+    "source": "/proc/net/dev enp14s0,wlp13s0",
+    "note": "unit slot always reads RPM",
+    "clipsIn": []
+  },
+  {
+    "item": "Fan Speed Net Up KB/s",
+    "title": "Net Up KB/s",
+    "unit": "RPM",
+    "group": "Custom",
+    "available": true,
+    "source": "/proc/net/dev enp14s0,wlp13s0",
+    "note": "unit slot always reads RPM",
+    "clipsIn": []
+  },
+  {
+    "item": "Fan Speed GPU W",
+    "title": "GPU W",
+    "unit": "RPM",
+    "group": "Custom",
+    "available": true,
+    "source": "nvidia-smi",
+    "note": "unit slot always reads RPM; same value as GPU Power",
+    "clipsIn": []
+  }
+]

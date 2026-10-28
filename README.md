@@ -258,7 +258,9 @@ ryuod serves the control page from `web/dist/`, which is committed, so an instal
 After changing anything under `web/src/`, run `make build-frontend` and commit `web/dist/` with the
 change: `make test` fails while `web/dist/` differs from a fresh build. For working on the page,
 `npm run dev` in `web/` serves it at http://127.0.0.1:5173/ with live reload and passes `/api`
-requests to the running ryuod on port 8746.
+requests to the running ryuod on port 8746. `npm run demo` serves the same page with made-up data
+instead (`web/demo/mock-api.ts`): sample clips, live-looking stats, uploads and the second display,
+all in memory, with nothing sent to ryuod or the cooler. Use it to record the page.
 
 `make run` refuses while `ryuod.service` is active, because both would want port 8746. Stop the
 service first (`systemctl --user stop ryuod`, or Stop in the tray) and start it again when you are

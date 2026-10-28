@@ -18,5 +18,5 @@
     // so the elements declare them with `declare` and this stays at the ES2022 default.
     "useDefineForClassFields": true
   },
-  "include": ["src", "tests/**/*.ts", "vite.config.ts"]
+  "include": ["src", "tests/**/*.ts", "demo/*.ts", "vite.config.ts"]
 }
