@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f2484e"/><stop offset="1" stop-color="#bf181e"/></linearGradient>
+    <linearGradient id="top" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d3d6db"/><stop offset="1" stop-color="#9a9ea5"/></linearGradient>
+  </defs>
+  <g transform="scale(0.75)">
+    <path d="M6 18H50Q58 18 60 12V44Q60 54 50 54H6Z" fill="#000000" fill-opacity="0.1" transform="translate(0 1.333)"/>
+    <path d="M6 18H50Q58 18 60 12V44Q60 54 50 54H6Z" fill="url(#body)"/>
+    <path d="M6 18L14 12H60Q58 18 50 18Z" fill="url(#top)"/>
+    <path d="M12 26H32V42H12ZM38 26H47Q53 26 55 22V29Q53 33 47 33H38ZM38 39H47Q53 39 55 36V41Q53 44 47 44H38Z" fill="#000000" fill-opacity="0.16" transform="translate(1.5 1.5)"/>
+    <path d="M12 26H32V42H12ZM38 26H47Q53 26 55 22V29Q53 33 47 33H38ZM38 39H47Q53 39 55 36V41Q53 44 47 44H38Z" fill="#ffffff"/>
+    <path d="M6 18.5H50Q58 18.5 60 12.5" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1"/>
+  </g>
+</svg>
