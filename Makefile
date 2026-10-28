@@ -139,8 +139,8 @@ test: test-python test-frontend
 	@# Run the Python and web page test suites
 
 test-python:
-	# Run the Python tests
-	uv run pytest
+	# Run the Python tests, one worker per CPU: most of the run is tests waiting on real 1 s heartbeats
+	uv run pytest -n auto
 
 test-frontend:
 	# Typecheck and test the control page, then fail if the committed web/dist/ differs from a fresh build
