@@ -61,10 +61,12 @@ class Cancelled(Exception):
 
 
 class StillImage(MediaError):
-    """The file is a single picture (PNG, JPEG, WebP, BMP...), not a video. still_to_png() takes those."""
+    """The file is a single picture (PNG, JPEG, WebP, BMP, HEIC...), not a video. still_to_png() takes
+    those, with `grid` from tile_grid() when the picture is stored as tiles."""
 
-    def __init__(self):
+    def __init__(self, grid=None):
         super().__init__("this is a still image; choose a video file")
+        self.grid = grid
 
 
 # ---------------------------------------------------------------- binaries
@@ -198,12 +200,36 @@ def is_still(format_name):
     return "_pipe" in format_name or format_name == "image2"
 
 
+# ISO BMFF major brands of a HEIF or AVIF picture. ffmpeg reads those through its MP4 demuxer, so
+# the format name alone looks like a video. msf1, hevc and avis are image sequences and are left out.
+HEIF_BRANDS = ("heic", "heix", "mif1", "avif")
+
+
+def tile_grid(probed):
+    """How to rebuild a HEIF picture stored as tiles, from ffprobe's -show_stream_groups JSON, or None.
+
+    Phones save a 12 MP photo as a grid of 512x512 HEVC tiles, and ffmpeg 7.1 lists each tile as
+    its own video stream without joining them. Returns {"tiles": [(stream index, x, y)...],
+    "crop": (w, h, x, y)} for the default group, else the first: xstack places the tiles, and the
+    crop cuts the grid's padding off the right and bottom edges."""
+    groups = [g for g in probed.get("stream_groups") or [] if g.get("type") == "Tile Grid"]
+    if not groups:
+        return None
+    group = next((g for g in groups if (g.get("disposition") or {}).get("default")), groups[0])
+    grid = group["components"][0]
+    indexes = [s["index"] for s in group["streams"]]
+    tiles = [(indexes[sub["stream_index"]], sub["tile_horizontal_offset"], sub["tile_vertical_offset"])
+             for sub in grid["subcomponents"]]
+    return {"tiles": tiles,
+            "crop": (grid["width"], grid["height"], grid["horizontal_offset"], grid["vertical_offset"])}
+
+
 def video_info(probed):
     """The facts plan() needs, from ffprobe's JSON. Raises MediaError for files with no video."""
     fmt = probed.get("format") or {}
     streams = probed.get("streams") or []
-    if is_still(fmt.get("format_name", "")):
-        raise StillImage()
+    if is_still(fmt.get("format_name", "")) or (fmt.get("tags") or {}).get("major_brand") in HEIF_BRANDS:
+        raise StillImage(tile_grid(probed))
     video = next((s for s in streams if s.get("codec_type") == "video"
                   and not (s.get("disposition") or {}).get("attached_pic")), None)
     if video is None:
@@ -242,6 +268,12 @@ def ffmpeg_info(text):
         raise MediaError(f"ffmpeg cannot read this file: {last}")
     if is_still(m.group(1)):
         raise StillImage()
+    # ffmpeg -i names the grid but not where each tile goes; ffprobe's -show_stream_groups does.
+    if "Tile Grid:" in text:
+        raise MediaError("this picture is stored as tiles, and joining them needs ffprobe: install ffmpeg on PATH")
+    brand = re.search(r"^\s*major_brand\s*: (\w+)", text, re.M)
+    if brand and brand.group(1) in HEIF_BRANDS:
+        raise StillImage()
     # "Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709), 1920x960 ..."
     v = re.search(r"^\s*Stream #0:\d+\S*: Video: (\w+)[^,\n]*(?:, (\w+))?", text, re.M)
     if v is None:
@@ -258,7 +290,8 @@ def inspect(path, t):
     """video_info() through ffprobe when there is one, else ffmpeg_info()."""
     try:
         if t.ffprobe:
-            r = subprocess.run([t.ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path],
+            r = subprocess.run([t.ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams",
+                                "-show_stream_groups", path],
                                capture_output=True, text=True, errors="replace", timeout=60)
             if r.returncode != 0:
                 last = (r.stderr.strip().splitlines() or ["no error output"])[-1]
@@ -383,13 +416,100 @@ def convert(src, dst, info, action, fit, t, on_progress=None, cancel=None):
     run(ffmpeg_args(src, dst, info, action, fit, t), line, cancel, name="ffmpeg")
 
 
-def still_to_png(src, dst, fit, t, cancel=None):
+def _boxes(f, end):
+    """(type, payload start, payload end) for each ISO BMFF box from f's position up to end."""
+    pos = f.tell()
+    while pos + 8 <= end:
+        f.seek(pos)
+        size, kind = struct.unpack(">I4s", f.read(8))
+        start = pos + 8
+        if size == 1:
+            (size,) = struct.unpack(">Q", f.read(8))
+            start += 8
+        elif size == 0:
+            size = end - pos
+        if size < start - pos:
+            return
+        yield kind.decode("latin-1"), start, pos + size
+        pos += size
+
+
+def _child(f, start, end, kind):
+    f.seek(start)
+    return next(((s, e) for k, s, e in _boxes(f, end) if k == kind), None)
+
+
+# irot turns the picture counter-clockwise by 90° per step; imir axis 0 mirrors left-right.
+IROT_FILTERS = {1: ["transpose=cclock"], 2: ["hflip", "vflip"], 3: ["transpose=clock"]}
+IMIR_FILTERS = {0: ["hflip"], 1: ["vflip"]}
+
+
+def heif_orientation(path):
+    """ffmpeg filters that turn a HEIF picture upright, from the irot and imir properties of its
+    primary item; [] for any other file. ffmpeg 7.1 neither applies these to a tile grid nor
+    reports them. A phone holding the camera upright saves a landscape grid with irot 3."""
+    try:
+        with open(path, "rb") as f:
+            end = os.fstat(f.fileno()).st_size
+            if f.read(8)[4:] != b"ftyp":
+                return []
+            f.seek(0)
+            meta = next(((s, e) for k, s, e in _boxes(f, end) if k == "meta"), None)
+            if meta is None:
+                return []
+            meta = (meta[0] + 4, meta[1])  # skip the full box's version and flags
+            pitm, iprp = _child(f, *meta, "pitm"), _child(f, *meta, "iprp")
+            if pitm is None or iprp is None:
+                return []
+            f.seek(pitm[0])
+            version = f.read(4)[0]
+            (primary,) = struct.unpack(">H" if version == 0 else ">I", f.read(2 if version == 0 else 4))
+            ipco, ipma = _child(f, *iprp, "ipco"), _child(f, *iprp, "ipma")
+            if ipco is None or ipma is None:
+                return []
+            f.seek(ipco[0])
+            props = [(k, s) for k, s, _ in _boxes(f, ipco[1])]
+            f.seek(ipma[0])
+            version, flags = f.read(1)[0], int.from_bytes(f.read(3), "big")
+            (count,) = struct.unpack(">I", f.read(4))
+            for _ in range(count):
+                (item,) = struct.unpack(">H" if version < 1 else ">I", f.read(2 if version < 1 else 4))
+                links = [int.from_bytes(f.read(2 if flags & 1 else 1), "big") & (0x7FFF if flags & 1 else 0x7F)
+                         for _ in range(f.read(1)[0])]
+                if item != primary:
+                    continue
+                filters = []
+                # Property indexes count from 1; 0 means none. The order of the links is the order to apply them.
+                for kind, start in (props[i - 1] for i in links if 0 < i <= len(props)):
+                    if kind in ("irot", "imir"):
+                        f.seek(start)
+                        value = f.read(1)[0]
+                        filters += IROT_FILTERS.get(value & 3, []) if kind == "irot" else IMIR_FILTERS[value & 1]
+                return filters
+    except (OSError, struct.error, IndexError):
+        pass
+    return []
+
+
+def still_to_png(src, dst, fit, t, cancel=None, grid=None):
     """A still image as a PANEL_W x PANEL_H 8-bit RGB PNG, the format of black_png(), which HomeUI
     shows full screen in its ImageView. The first frame only (an animated WebP keeps one), no
-    metadata; an alpha channel is dropped. Pixels count as square: picture formats rarely say otherwise."""
+    metadata; an alpha channel is dropped. Pixels count as square: picture formats rarely say otherwise.
+    A HEIF picture is joined from its tiles (grid, from tile_grid()) and turned upright first."""
     part = dst + ".part"
-    run([t.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", src, "-map", "0:v:0",
-         "-map_metadata", "-1", "-vf", video_filter({"sar": None}, fit), "-frames:v", "1", "-pix_fmt", "rgb24",
+    if grid and len(grid["tiles"]) > 1:
+        inputs = "".join(f"[0:{index}]" for index, _, _ in grid["tiles"])
+        layout = "|".join(f"{x}_{y}" for _, x, y in grid["tiles"])
+        source = f"{inputs}xstack=inputs={len(grid['tiles'])}:layout={layout}"
+    else:
+        source = f"[0:{grid['tiles'][0][0]}]null" if grid else "[0:v:0]null"
+    steps = [source]
+    if grid:
+        steps.append("crop={}:{}:{}:{}".format(*grid["crop"]))
+    steps += [*heif_orientation(src), video_filter({"sar": None}, fit)]
+    run([t.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", src,
+         "-filter_complex", ",".join(steps) + "[out]", "-map", "[out]",
+         "-map_metadata", "-1", "-frames:v", "1", "-pix_fmt", "rgb24",
          "-c:v", "png", "-f", "image2", part], cancel=cancel, name="ffmpeg")
     if not os.path.exists(part) or os.path.getsize(part) == 0:
         raise MediaError("ffmpeg wrote no image")

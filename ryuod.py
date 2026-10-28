@@ -1843,14 +1843,14 @@ class Upload(threading.Thread):
         ext = ".mp4"
         try:
             info = M.inspect(self.src, t)
-        except M.StillImage:
+        except M.StillImage as still:
             # HomeUI shows a still under any name but .mp4, as it does BLACK_NAME.
             action, reason, ext = "image", f"still image; converted to a {M.PANEL_W}x{M.PANEL_H} PNG", ".png"
             self.set(action=action, reason=reason, encoder=None)
             log(f"upload: {self.status['file']}: {action} ({reason})")
             out = os.path.join(self.dir, "panel.png")
             self.set(state="converting", progress=None)
-            M.still_to_png(self.src, out, self.fit, t, self.cancel_)
+            M.still_to_png(self.src, out, self.fit, t, self.cancel_, still.grid)
         else:
             action, reason = M.plan(info)
             self.set(action=action, reason=reason, encoder=t.encoder if action == "transcode" else None)

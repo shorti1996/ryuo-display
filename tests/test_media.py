@@ -241,6 +241,72 @@ def test_still_to_png_reports_an_empty_result(tmp_path):
     assert not (tmp_path / "out.png").exists()
 
 
+# ---------------------------------------------------------------- HEIF pictures
+
+def grid_probed(default_group=0):
+    """ffprobe's JSON for a phone HEIC: a 2x1 grid of 512x512 tiles cropped to 1000x500, then a
+    one-tile thumbnail grid. Group subcomponents count streams within the group."""
+    def group(index, streams, tiles, crop, default):
+        return {"index": index, "type": "Tile Grid", "disposition": {"default": default},
+                "streams": [{"index": i} for i in streams],
+                "components": [{"width": crop[0], "height": crop[1], "horizontal_offset": 0, "vertical_offset": 0,
+                                "subcomponents": [{"stream_index": n, "tile_horizontal_offset": x,
+                                                   "tile_vertical_offset": y} for n, (x, y) in enumerate(tiles)]}]}
+    tile = {"codec_type": "video", "codec_name": "hevc", "width": 512, "height": 512}
+    return {"format": {"format_name": "mov,mp4,m4a,3gp,3g2,mj2", "tags": {"major_brand": "heic"}},
+            "streams": [{**tile, "index": i} for i in range(4)],
+            "stream_groups": [group(0, [0, 1], [(0, 0), (512, 0)], (1000, 500), int(default_group == 0)),
+                              group(1, [3], [(0, 0)], (320, 160), int(default_group == 1))]}
+
+
+def test_heic_is_a_still_image_with_its_tile_grid():
+    with pytest.raises(M.StillImage) as raised:
+        M.video_info(grid_probed())
+    assert raised.value.grid == {"tiles": [(0, 0, 0), (1, 512, 0)], "crop": (1000, 500, 0, 0)}
+
+
+def test_tile_grid_takes_the_default_group_and_global_stream_indexes():
+    assert M.tile_grid(grid_probed(default_group=1)) == {"tiles": [(3, 0, 0)], "crop": (320, 160, 0, 0)}
+    assert M.tile_grid(probed()) is None
+
+
+def test_heic_without_ffprobe():
+    head = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'a.heic':\n  Metadata:\n    major_brand     : heic\n"
+    with pytest.raises(M.MediaError, match="joining them needs ffprobe"):
+        M.ffmpeg_info(head + "  Stream group #0:0[0x31]: Tile Grid: hevc (Main), yuvj420p(pc), 4000x3000 (default)\n"
+                             "  Stream #0:0[0x1]: Video: hevc (Main), yuvj420p(pc), 512x512\n")
+    with pytest.raises(M.StillImage):
+        M.ffmpeg_info(head + "  Stream #0:0[0x1]: Video: hevc (Main), yuvj420p(pc), 512x512\n")
+
+
+def box(kind, *payload):
+    body = b"".join(payload)
+    return struct.pack(">I4s", 8 + len(body), kind) + body
+
+
+def heif_bytes(links, primary=1):
+    """A HEIF header: item 1 is primary, ipco holds [hvcC, irot 3, imir 0], ipma gives item `primary` `links`."""
+    ipco = box(b"ipco", box(b"hvcC", b"\0" * 4), box(b"irot", b"\x03"), box(b"imir", b"\x00"))
+    ipma = box(b"ipma", b"\0\0\0\0", struct.pack(">IHB", 1, primary, len(links)), bytes(links))
+    meta = box(b"meta", b"\0\0\0\0", box(b"hdlr", b"\0" * 24), box(b"pitm", b"\0\0\0\0", struct.pack(">H", 1)),
+               box(b"iprp", ipco, ipma))
+    return box(b"ftyp", b"heic\0\0\0\0mif1heic") + box(b"mdat", b"\0" * 16) + meta
+
+
+@pytest.mark.parametrize("data, want", [
+    (heif_bytes([0x81, 0x02]), ["transpose=clock"]),
+    (heif_bytes([0x81, 0x03, 0x02]), ["hflip", "transpose=clock"]),  # the ipma order is the order applied
+    (heif_bytes([0x81, 0x02], primary=2), []),  # the rotation belongs to another item
+    (heif_bytes([0x81]), []),
+    (b"\x89PNG\r\n\x1a\n" + b"\0" * 32, []),
+    (heif_bytes([0x81, 0x02])[:-9], []),  # cut short
+])
+def test_heif_orientation(tmp_path, data, want):
+    path = tmp_path / "a.heic"
+    path.write_bytes(data)
+    assert M.heif_orientation(str(path)) == want
+
+
 # ---------------------------------------------------------------- black image for the second display
 
 def test_black_png_is_a_valid_2240x1080_black_image():
@@ -404,3 +470,27 @@ def test_real_transcode_with_imageio_ffmpeg_and_libx265(tmp_path):
     assert float(out["format"]["duration"]) == pytest.approx(5, abs=0.1)
     assert int(out["format"]["bit_rate"]) < 8_500_000
     assert M.plan(M.video_info(out))[0] == "copy"
+
+
+@needs_system
+def test_real_still_to_png_joins_tiles(tmp_path):
+    """Two 64x64 tile streams, red then blue, stand in for a HEIC grid. The 120x64 crop trims the
+    blue tile; filling the panel keeps red on the left and blue on the right."""
+    src, dst = str(tmp_path / "tiles.mkv"), str(tmp_path / "out.png")
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=red:s=64x64:d=0.1",
+                    "-f", "lavfi", "-i", "color=blue:s=64x64:d=0.1", "-map", "0", "-map", "1", "-c:v", "ffv1", src],
+                   check=True)
+    M.still_to_png(src, dst, "pad", M.Tools("ffmpeg", "ffprobe", "libx265"),
+                   grid={"tiles": [(0, 0, 0), (1, 64, 0)], "crop": (120, 64, 0, 0)})
+    rgb = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", dst, "-f", "rawvideo",
+                          "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+    assert len(rgb) == M.PANEL_W * M.PANEL_H * 3
+
+    def pixel(x, y):
+        return tuple(rgb[(y * M.PANEL_W + x) * 3:][:3])
+
+    # 120x64 padded to the panel's height is 2025 wide, so the picture spans x 107..2132.
+    assert pixel(10, 540) == (0, 0, 0)
+    assert pixel(400, 540)[0] > 200 and pixel(400, 540)[2] < 50
+    assert pixel(1900, 540)[2] > 200 and pixel(1900, 540)[0] < 50
+    assert pixel(2200, 540) == (0, 0, 0)
