@@ -602,6 +602,8 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
 export function mockApi(): Plugin {
   return {
     name: "ryuo-mock-api",
+    // The tab says which page is the demo when both are open.
+    transformIndexHtml: (page) => page.replace(/<title>(.*?)<\/title>/, "<title>$1 (demo)</title>"),
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
         if (!request.url?.startsWith("/api/")) return next();
