@@ -1,0 +1,4 @@
+# Phone recordings (~140 MB) and everything rendered from them stay local
+raw/
+out/
+frames/
