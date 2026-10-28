@@ -67,7 +67,7 @@ def api(path, body=None):
 
 
 def icon_name(state):
-    return f"ryuo-lcd-{state}-symbolic"
+    return f"ryuo-display-{state}-symbolic"
 
 
 def icon_files(state):
@@ -187,7 +187,7 @@ class Tray:
         if self.left_click in ("panel", "stats"):
             self.refresh()  # toggle from what ryuod reports now, not from the last poll
             if self.state is None:
-                self.tray.showMessage("RYUO LCD", "ryuod did not answer", QSystemTrayIcon.Warning, 3000)
+                self.tray.showMessage("RYUO Display", "ryuod did not answer", QSystemTrayIcon.Warning, 3000)
             elif self.left_click == "panel":
                 self.post("/api/panel", {"on": not self.state.get("panel", {}).get("on", True)})
             else:
@@ -198,9 +198,9 @@ class Tray:
     def post(self, path, body):
         res = api(path, body)
         if res is None:
-            self.tray.showMessage("RYUO LCD", "ryuod did not answer", QSystemTrayIcon.Warning, 3000)
+            self.tray.showMessage("RYUO Display", "ryuod did not answer", QSystemTrayIcon.Warning, 3000)
         elif res.get("ok") is False:
-            self.tray.showMessage("RYUO LCD", res.get("error") or "ryuod refused", QSystemTrayIcon.Warning, 3000)
+            self.tray.showMessage("RYUO Display", res.get("error") or "ryuod refused", QSystemTrayIcon.Warning, 3000)
         self.refresh()
 
     def refresh(self):
@@ -219,7 +219,7 @@ class Tray:
         self.status.setText(text)
         icon = icon_state(self.state)
         extra = {"mirror": " · second display", "standby": " · panel in standby"}.get(icon, "")
-        self.tray.setToolTip(f"RYUO LCD — {text}{extra}")
+        self.tray.setToolTip(f"RYUO Display — {text}{extra}")
         self.tray.setIcon(self.icons[icon])
         for a in (self.stats, self.bright_menu.menuAction(), self.stop):
             a.setEnabled(up)

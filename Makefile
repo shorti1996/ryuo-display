@@ -58,6 +58,8 @@ install:
 		install -D -m 644 $(APPDIR)/packaging/icons/$$f $(ICONS_DIR)/$$f; done; \
 	if [ -n "$$new" ]; then echo "New icons installed. If the tray icon is blank:" \
 		"systemctl --user restart plasma-plasmashell.service"; fi
+	# Icons installed under the project's old name (ryuo-lcd, before 2026-10-28) would stay forever
+	rm -f $(ICONS_DIR)/hicolor/*/*/ryuo-lcd*.svg
 	# A newer mtime on the theme directory makes icon caches rescan it
 	touch $(ICONS_DIR)/hicolor
 	sed 's|@APPDIR@|$(APPDIR)|g' $(APPDIR)/packaging/ryuod.service > $(UNIT_DIR)/ryuod.service
@@ -70,7 +72,7 @@ install:
 	$(SYSTEMCTL) --user restart ryuod.service
 	$(rebuild-menu)
 	@if pgrep -f '[r]yuo_tray.py' >/dev/null 2>&1; then echo "The running tray keeps its old code:" \
-		"quit it from its menu and start RYUO LCD again."; fi
+		"quit it from its menu and start RYUO Display again."; fi
 	@uevent=$$(grep -liE '^HID_ID=[0-9a-f]+:0000(0b05|1c75):00001c76$$' $(HIDRAW_SYSFS)/hidraw*/device/uevent 2>/dev/null | head -n 1); \
 	if [ -z "$$uevent" ]; then \
 		echo "No RYUO IV hidraw node found (cooler off or not enumerated)."; \

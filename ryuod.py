@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ryuod: keeps the RYUO IV pump LCD showing media with live Linux stats over it.
+"""ryuod: keeps the RYUO IV pump screen showing media with live Linux stats over it.
 
 Control page and JSON API on http://127.0.0.1:8746/. One device worker thread owns the
 hidraw fd: it runs the startup sequence, sends a PcInfo heartbeat every second (HomeUI

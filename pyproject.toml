@@ -1,7 +1,7 @@
 [project]
-name = "rog-ryuo-lcd"
+name = "ryuo-display"
 version = "0.1.0"
-description = "Linux driver, stats daemon and tray for the ASUS ROG RYUO IV pump LCD"
+description = "Linux control panel for the AMOLED screen of the ASUS ROG RYUO IV: live PC stats, your own videos and a second-monitor mode"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"

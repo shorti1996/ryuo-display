@@ -92,7 +92,7 @@ export class RyuoApp extends RyuoElement {
     const blocked = standbyBlocked(state);
     const sending = state?.editing.has("panel.on") ?? false;
     return html`<header id="hdr">
-      <h1>RYUO IV LCD</h1>
+      <h1>RYUO Display</h1>
       <div class="grow"></div>
       <button class=${tone ? `pill ${tone}` : "pill"} id="connPill" type="button" aria-label="Connection details"
         aria-live="polite" title=${errorText(state)} @click=${() => this.select("app", true)}>

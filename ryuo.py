@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linux driver for the ASUS ROG RYUO IV pump LCD (USB 0b05:1c76).
+"""Linux driver for the ASUS ROG RYUO IV pump screen (USB 0b05:1c76).
 
 The cooler runs Android. Media files go over adb into /sdcard/pcMedia/; playback is
 selected with text commands framed into 1024-byte HID output reports, parsed on the

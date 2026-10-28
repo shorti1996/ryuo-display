@@ -96,7 +96,7 @@ def is_icon(tray, name):
 def test_daemon_down(env, tray):
     tray.refresh()
     assert tray.status.text() == "ryuod is not running"
-    assert tray.tray.toolTip() == "RYUO LCD — ryuod is not running"
+    assert tray.tray.toolTip() == "RYUO Display — ryuod is not running"
     assert is_icon(tray, "offline")
     assert not tray.stats.isEnabled()
     assert not tray.bright_menu.menuAction().isEnabled()
@@ -175,7 +175,7 @@ def test_second_display_follows_state_and_posts(env, tray):
     tray.refresh()
     assert tray.display.isChecked()
     assert is_icon(tray, "mirror")
-    assert tray.tray.toolTip() == "RYUO LCD — Ryuo IV Standard · V1.0.10 · second display"
+    assert tray.tray.toolTip() == "RYUO Display — Ryuo IV Standard · V1.0.10 · second display"
 
 
 def test_second_display_disabled_without_support_or_daemon(env, tray):
@@ -199,7 +199,7 @@ def test_post_failure_shows_message(env, tray):
     tray.tray = mock.MagicMock(wraps=tray.tray)
     tray.post("/api/brightness", {"value": 50})
     tray.tray.showMessage.assert_called_once()
-    assert tray.tray.showMessage.call_args.args[:2] == ("RYUO LCD", "ryuod did not answer")
+    assert tray.tray.showMessage.call_args.args[:2] == ("RYUO Display", "ryuod did not answer")
 
 
 def test_left_click_opens_page(env, tray):
@@ -415,8 +415,8 @@ def test_every_icon_file_exists():
     for state in ryuo_tray.ICON_STATES:
         for path in ryuo_tray.icon_files(state):
             assert os.path.isfile(path), path
-    # The desktop entry's Icon=ryuo-lcd.
-    assert os.path.isfile(os.path.join(ryuo_tray.ICON_DIR, "hicolor", "scalable", "apps", "ryuo-lcd.svg"))
+    # The desktop entry's Icon=ryuo-display.
+    assert os.path.isfile(os.path.join(ryuo_tray.ICON_DIR, "hicolor", "scalable", "apps", "ryuo-display.svg"))
 
 
 @pytest.fixture
@@ -443,14 +443,14 @@ def test_installed_icon_is_loaded_by_name(icon_theme, capsys):
         "[scalable/status]\nSize=22\nMinSize=8\nMaxSize=512\nType=Scalable\n"
     )
     icon = ryuo_tray.make_icon("live")
-    assert icon.name() == "ryuo-lcd-live-symbolic"  # what Qt sends Plasma as IconName
+    assert icon.name() == "ryuo-display-live-symbolic"  # what Qt sends Plasma as IconName
     assert capsys.readouterr().err == ""
 
 
 def test_uninstalled_icon_falls_back_to_repo_files(icon_theme, capsys):
     icon = ryuo_tray.make_icon("offline")
     assert icon.name() == ""
-    assert "ryuo-lcd-offline-symbolic is not installed" in capsys.readouterr().err
+    assert "ryuo-display-offline-symbolic is not installed" in capsys.readouterr().err
     # Drawn, not blank: a blank one means Qt's SVG image plugin is missing.
     img = icon.pixmap(22, 22).toImage()
     assert img.pixelColor(0, 0).alpha() == 0
@@ -485,7 +485,7 @@ def test_panel_item_follows_state_and_posts(env, tray):
     tray.refresh()
     assert not tray.panel.isChecked()
     assert is_icon(tray, "standby")
-    assert tray.tray.toolTip() == "RYUO LCD — Ryuo IV Standard · V1.0.10 · panel in standby"
+    assert tray.tray.toolTip() == "RYUO Display — Ryuo IV Standard · V1.0.10 · panel in standby"
     assert not tray.display.isEnabled()  # ryuod refuses the second display in standby
 
 
@@ -570,7 +570,7 @@ def test_left_click_toggle_with_ryuod_down_warns(env, tray):
     env.state["value"] = None
     tray.tray = mock.MagicMock(wraps=tray.tray)
     tray.on_activated(QSystemTrayIcon.Trigger)
-    assert tray.tray.showMessage.call_args.args[:2] == ("RYUO LCD", "ryuod did not answer")
+    assert tray.tray.showMessage.call_args.args[:2] == ("RYUO Display", "ryuod did not answer")
     assert not any(path == "/api/panel" for path, _ in env.calls)
 
 
@@ -579,7 +579,7 @@ def test_refused_post_shows_ryuods_error(env, tray):
     tray.tray = mock.MagicMock(wraps=tray.tray)
     tray.post("/api/display", {"on": True})
     assert tray.tray.showMessage.call_args.args[:2] == (
-        "RYUO LCD", "the panel is in standby; turn it on before the second display")
+        "RYUO Display", "the panel is in standby; turn it on before the second display")
 
 
 def test_api_returns_the_error_body_of_a_refusal(monkeypatch):

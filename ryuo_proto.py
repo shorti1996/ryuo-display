@@ -1,4 +1,4 @@
-"""Protocol layer for the ASUS ROG RYUO IV pump LCD, shared by ryuo.py and ryuod.py.
+"""Protocol layer for the ASUS ROG RYUO IV pump screen, shared by ryuo.py and ryuod.py.
 
 Frame: 0x5A | escape(len_be16 + payload + crc8) | 0x5A
   len   = len(payload) + 5, big-endian

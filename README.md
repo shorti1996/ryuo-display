@@ -1,9 +1,10 @@
-# rog-ryuo-lcd
+# ryuo-display
 
 ![The cooler's panel on a running PC: the KDE desktop moving between the monitor and the panel, cmatrix, an audio visualiser, fastfetch and a cat video](docs/011-hardware-demo/hardware-demo.gif)
 
-Linux software for the 2240×1080 OLED panel on the pump of the ASUS ROG RYUO IV AIO cooler. It replaces
-the Windows app for the screen: it plays videos stored on the cooler and draws live PC stats
+Linux control panel for the 2240×1080 AMOLED screen on the pump of the ASUS ROG RYUO IV AIO cooler:
+live PC stats, your own videos, and the only software that turns the screen into a second monitor.
+It replaces the Windows app: it plays videos stored on the cooler and draws live PC stats
 (CPU, GPU, memory, disk, network, clock) over them, refreshed once per second. The panel shows
 its standby video whenever no program has sent it a message for 5 s, so the daemon runs all the
 time you are logged in.
@@ -55,9 +56,9 @@ What gets installed:
 |---|---|---|
 | `/etc/udev/rules.d/70-rog-ryuo-iv.rules` | `make install-udev` | gives the logged-in user access to `/dev/hidraw*` for USB `0b05:1c76` and `1c75:1c76` (the cooler's HID interface) |
 | `~/.config/systemd/user/ryuod.service` | `make install` | runs `ryuod.py`; enabled and started |
-| `~/.local/share/applications/ryuo-tray.desktop` | `make install` | "RYUO LCD" in the start menu |
+| `~/.local/share/applications/ryuo-tray.desktop` | `make install` | "RYUO Display" in the start menu |
 | `~/.config/autostart/ryuo-tray.desktop` | `make install` | starts the tray icon at login |
-| `~/.local/share/icons/hicolor/*/{apps,status}/ryuo-lcd*.svg` | `make install` | the tray and start-menu icons |
+| `~/.local/share/icons/hicolor/*/{apps,status}/ryuo-display*.svg` | `make install` | the tray and start-menu icons |
 
 The installed unit and launchers run the code from this checkout. If you move the directory, run
 `make install` again.
@@ -128,7 +129,7 @@ settings in `state.json`, and the tray picks them up within 3 s.
 While the panel is in standby, brightness, overlay and background changes are saved and shown when
 it comes back on. Standby lasts until you switch it off or the daemon restarts.
 
-Starting "RYUO LCD" from the start menu while the tray already runs opens the control page
+Starting "RYUO Display" from the start menu while the tray already runs opens the control page
 instead of adding a second icon.
 
 ### Second display
@@ -235,8 +236,8 @@ tested here; only H.264 MP4 files have been played on the test unit.
 | The daemon stopped after running `./ryuo.py play` | Only one program can drive the panel; the newest one takes over and the other exits cleanly, so systemd does not restart the daemon. Stop `play` with `./ryuo.py stop`, then start the daemon from the tray. |
 | No tray icon | The desktop has no StatusNotifier tray. On GNOME, install the AppIndicator extension. The daemon and the control page work without the tray. |
 | Tray icon is blank after `make install` | Plasma looked the icon up before it was installed and does not look again. Restart the Plasma shell: `systemctl --user restart plasma-plasmashell.service` (the panel disappears for a few seconds). `make install` prints this when it adds the icons for the first time. |
-| Tray still shows the old icon or menu after `make install` | `make install` restarts the daemon, not a running tray. Quit the tray from its menu and start "RYUO LCD" again. |
-| Tray icon stays dark on a dark panel | The icons are not installed, so the tray sends Plasma the repo's files as pixels and Plasma cannot recolour them. The tray prints `ryuo-lcd-…-symbolic is not installed` to stderr. Run `make install`, then quit and restart the tray. |
+| Tray still shows the old icon or menu after `make install` | `make install` restarts the daemon, not a running tray. Quit the tray from its menu and start "RYUO Display" again. |
+| Tray icon stays dark on a dark panel | The icons are not installed, so the tray sends Plasma the repo's files as pixels and Plasma cannot recolour them. The tray prints `ryuo-display-…-symbolic is not installed` to stderr. Run `make install`, then quit and restart the tray. |
 | `Permission denied` on `/dev/hidraw*`, or "RYUO IV HID interface not found" | The udev rule is missing or not applied yet. Run `make install-udev`, then unplug and replug the cooler's USB header (or reboot), or run `sudo udevadm trigger`. |
 | Daemon exits with `cannot bind 127.0.0.1:8746` | Another program uses port 8746, which the tray and the page expect. Free the port; systemd retries every 5 s. |
 | The stats overlay disappears for about 2 s every 5 min | The cooler's own burn-in protection plays a short screensaver clip. The firmware resets that timer only by restarting the video, so the daemon leaves it on. |

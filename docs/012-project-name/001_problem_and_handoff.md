@@ -1,9 +1,16 @@
 # Project name: problem and handoff
 
-Status: name not chosen, nothing renamed (2026-10-28). Comes from the session that added the README
-hero GIF and the GPL-3.0-or-later licence (`e4d73bc`). The task is to propose a name with the
-user, then rename. This doc holds the constraints, the rejected names and every place the current
-name appears.
+Status: **decided and renamed on 2026-10-28**: repo slug `ryuo-display`, label "RYUO Display",
+tagline in `README.md:5`. The Gitea repo is renamed; the local folder `/home/shared/repos/rog-ryuo-lcd`,
+the D-Bus and portal id `org.rogryuolcd.Display` and the udev rule keep their names (see "Do not
+forget"). `make install` now removes icons installed under the old `ryuo-lcd*` names. Open
+questions 2 and 3 were answered the same day: a web search found no other RYUO IV software with a
+second-monitor mode, and ASUS's product pages call the screen a "6.67-inch curved AMOLED", so the
+description says AMOLED. The rest of this doc is the record of how the name was chosen.
+
+Comes from the session that added the README hero GIF and the GPL-3.0-or-later licence
+(`e4d73bc`). The task was to propose a name with the user, then rename. This doc holds the
+constraints, the rejected names and every place the old name appeared.
 
 ## The short version
 

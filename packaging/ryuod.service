@@ -1,5 +1,5 @@
 [Unit]
-Description=ROG RYUO IV pump LCD daemon (heartbeat, stats overlay, http://127.0.0.1:8746/)
+Description=RYUO Display daemon for the ROG RYUO IV pump screen (heartbeat, stats overlay, http://127.0.0.1:8746/)
 Documentation=file://@APPDIR@/docs/002-stats-prototype/spec.md
 
 [Service]

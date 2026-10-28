@@ -1,14 +1,14 @@
 [Desktop Entry]
 Type=Application
-Name=RYUO LCD
-GenericName=Pump LCD control
-Comment=Tray icon and stats overlay for the ASUS ROG RYUO IV pump screen
+Name=RYUO Display
+GenericName=Pump screen control
+Comment=Tray icon, stats overlay and second-monitor mode for the ASUS ROG RYUO IV pump screen
 Exec=/usr/bin/python3 @APPDIR@/ryuo_tray.py
-Icon=ryuo-lcd
+Icon=ryuo-display
 Terminal=false
 StartupNotify=false
 Categories=Utility;System;
-Keywords=ryuo;rog;asus;cooler;aio;pump;lcd;screen;stats;
+Keywords=ryuo;rog;asus;cooler;aio;pump;oled;amoled;screen;display;monitor;stats;
 Actions=open;
 
 [Desktop Action open]
