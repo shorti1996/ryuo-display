@@ -116,9 +116,18 @@ export function standbyBlocked(state: Pick<SwitchInputs, "panel" | "displayWant"
 }
 
 /**
- * The hero shows the desktop mirror:the switch is on (the user's click, before ryuod has
+ * The switch is off but the virtual monitor is still there: from the click until ryuod answers
+ * (still "on"), then while it is removed ("stopping", up to about 10 s). The panel shows the
+ * desktop until then, so the hero keeps the mirror view with a note that the switch is under way.
+ */
+export function mirrorLeaving(displayWant: boolean, status: DisplayStatus | null): boolean {
+  return !displayWant && (status?.state === "on" || status?.state === "stopping");
+}
+
+/**
+ * The hero shows the desktop mirror: the switch is on (the user's click, before ryuod has
  * answered), or the virtual monitor is still being removed.
  */
 export function heroMirror(displayWant: boolean, status: DisplayStatus | null): boolean {
-  return displayWant || status?.state === "stopping";
+  return displayWant || mirrorLeaving(displayWant, status);
 }

@@ -15,6 +15,7 @@ import {
   heroMirror,
   mirrorChipText,
   mirrorHintShown,
+  mirrorLeaving,
   mirrorSwitch,
   pointerText,
   standbyBlocked,
@@ -135,9 +136,19 @@ describe("the hero's mirror view", () => {
 
   it("shows for the switch as clicked, and while the virtual monitor is removed", () => {
     expect(heroMirror(true, status())).toBe(true);
-    expect(heroMirror(false, status({ on: true, state: "on" }))).toBe(false);
+    expect(heroMirror(false, status({ on: true, state: "on" }))).toBe(true);
     expect(heroMirror(false, status({ state: "stopping" }))).toBe(true);
+    expect(heroMirror(false, status({ state: "off" }))).toBe(false);
     expect(heroMirror(false, null)).toBe(false);
+  });
+
+  it("notes the switch back from the click until the virtual monitor is gone", () => {
+    expect(mirrorLeaving(false, status({ on: true, state: "on" }))).toBe(true);
+    expect(mirrorLeaving(false, status({ state: "stopping" }))).toBe(true);
+    expect(mirrorLeaving(true, status({ on: true, state: "on" }))).toBe(false);
+    expect(mirrorLeaving(true, status({ state: "starting" }))).toBe(false);
+    expect(mirrorLeaving(false, status({ state: "off" }))).toBe(false);
+    expect(mirrorLeaving(false, null)).toBe(false);
   });
 });
 

@@ -269,7 +269,10 @@ describe("the hero's mirror view, as the old renderHero drew it", () => {
             const $ = oldPage.render(status, panelOn, want);
             const input = `${JSON.stringify(status?.state ?? null)} panel=${panelOn} want=${want}`;
             // media.ts heroView: standby outranks the mirror; ryuod answers and nothing is previewed here.
-            record(`mirrorView ${input}`, $("mirrorView").hidden, !(panelOn !== false && heroMirror(want, status)));
+            // The switch clicked off while ryuod still reports "on" differs on purpose: the old page
+            // flashed the live view, this one keeps the mirror view with its switching note.
+            if (want || status?.state !== "on")
+              record(`mirrorView ${input}`, $("mirrorView").hidden, !(panelOn !== false && heroMirror(want, status)));
             record(`chip ${input}`, $("mirrorChip").textContent, mirrorChipText(status));
             record(`caption ${input}`, $("mirrorHint").hidden, !mirrorHintShown(status));
           }
